@@ -24,6 +24,7 @@ import tensorflow as tf
 
 
 # @tf.keras.utils.register_keras_serializable(package='Text')
+@tf.function
 def gelu(x):
   """Gaussian Error Linear Unit.
 
