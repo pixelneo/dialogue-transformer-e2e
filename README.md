@@ -11,10 +11,10 @@ This is a repository for End-to-end Dialogue Transformer project for [Statistica
 Papers related to this work
 
 - [Sequicity](https://www.comp.nus.edu.sg/~kanmy/papers/acl18-sequicity.pdf)
-- [Incorporating Copying Mechanism in Sequence-to-Sequence Learning](https://arxiv.org/pdf/1603.06393.pdf) - A copy mechanism referenced from Sequicity, quite interesting paper
+- [Incorporating Copying Mechanism in Sequence-to-Sequence Learning](https://arxiv.org/pdf/1603.06393.pdf) - the copy mechanism referenced from Sequicity, quite an interesting paper
 - [Attention Is All You Need](https://arxiv.org/pdf/1706.03762.pdf) - the transformer architecture
 - [Hello, It's GPT-2](https://arxiv.org/pdf/1907.05774.pdf)
-- [ALBERT: A Lite BERT](https://arxiv.org/pdf/1909.11942.pdf) - IHMO (ondrej) the methods describer in this paper might be easier to use with limited computational resources compared to other pretrained transformers (BERT, GPT-2, XLNet, Transformer-XL, ...)
+- [ALBERT: A Lite BERT](https://arxiv.org/pdf/1909.11942.pdf) - IHMO (ondrej) the methods described in this paper might be easier to use with limited computational resources compared to other pretrained transformers (BERT, GPT-2, XLNet, Transformer-XL, ...)
 
 ## Acknowledgements
 - The transformer is the official [Tensorflow implementation](https://github.com/tensorflow/models/tree/master/official/transformer).
