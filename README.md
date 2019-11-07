@@ -16,6 +16,7 @@ Papers related to this work
 - [Hello, It's GPT-2](https://arxiv.org/pdf/1907.05774.pdf)
 - [ALBERT: A Lite BERT](https://arxiv.org/pdf/1909.11942.pdf) - IHMO (ondrej) the methods described in this paper might be easier to use with limited computational resources compared to other pretrained transformers (BERT, GPT-2, XLNet, Transformer-XL, ...)
 - [Training Tips for the Transfomer Model](https://ufal.mff.cuni.cz/pbml/110/art-popel-bojar.pdf) - A nice paper form UFAL about practical tips for training transformer, might be useful
+- [On Layer Normalization in the Transformer Architecture](https://openreview.net/forum?id=B1x8anVFPr) - They stabilize the training by placing layer normalization inside the residual block and before the multi-head attention (Pre-LN). Therefore they can remove warm-up and use a larger learning rate.
 
 ## Acknowledgements
 - The transformer is the official [Tensorflow implementation](https://github.com/tensorflow/models/tree/master/official/transformer).
