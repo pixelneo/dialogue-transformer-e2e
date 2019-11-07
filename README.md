@@ -4,8 +4,8 @@ This is a repository for End-to-end Dialogue Transformer project for [Statistica
 
 ## Goals
 - [ ] Use PyTorch's `nn.transformer` to implement Sequicity style dialogue system
-    * [] Try to run Sequicity as is - this *should* be quite easy.
-    * [] Rewrite classes `SimpleDynamicEncoder`, `BSpanDecoder`, and `ResponseDecoder` from `tsd_net.py` to use transformer instead of RNNs.
+    - [ ] Try to run Sequicity as is - this *should* be quite easy.
+    - [ ] Rewrite classes `SimpleDynamicEncoder`, `BSpanDecoder`, and `ResponseDecoder` from `tsd_net.py` to use transformer instead of RNNs.
         This will probably involve also adjusting `TSD` class.
 - [ ] Compare it with existing dialogue systems (probably Sequicity, mainly)
 - [ ] Improve performance by utilizing pre-trained LM 
