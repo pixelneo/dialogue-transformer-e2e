@@ -133,10 +133,10 @@ class Model:
                     loss.backward(retain_graph=turn_num != len(dial_batch) - 1)
                     grad = torch.nn.utils.clip_grad_norm(self.m.parameters(), 5.0)
                     optim.step()
-                    sup_loss += loss.data.cpu().numpy()[0]
+                    sup_loss += loss.data.cpu().numpy() #[0]
                     sup_cnt += 1
                     logging.debug(
-                        'loss:{} pr_loss:{} m_loss:{} grad:{}'.format(loss.data[0],
+                        'loss:{} pr_loss:{} m_loss:{} grad:{}'.format(loss.data#[0],
                                                                        pr_loss.data[0],
                                                                        m_loss.data[0],
                                                                        grad))
