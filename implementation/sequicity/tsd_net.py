@@ -523,7 +523,7 @@ class TSD(nn.Module):
                 return clone
 
         def beam_result_valid(decoded_t, bspan_index):
-            decoded_t = [_.view(-1).data[0] for _ in decoded_t]
+            decoded_t = [_.view(-1).item() for _ in decoded_t]
             req_slots = self.get_req_slots(bspan_index)
             decoded_sentence = self.vocab.sentence_decode(decoded_t, cfg.eos_m_token)
             for req in req_slots:
@@ -555,15 +555,17 @@ class TSD(nn.Module):
                 proba = torch.log(proba)
                 mt_proba, mt_index = torch.topk(proba, self.beam_size - dead_k)  # [1,K]
                 for new_k in range(self.beam_size - dead_k):
-                    score_incre = soft_score_incre(mt_proba[0][new_k].data[0], t) + score_bonus(state,
-                                                                                                mt_index[0][new_k].data[
-                                                                                                    0], bspan_index)
+                    score_incre = soft_score_incre(mt_proba[0][new_k].item(), t) + score_bonus(state,
+                                                                                                mt_index[0][new_k].item(), bspan_index)
                     if len(new_states) >= self.beam_size - dead_k and state.score + score_incre < new_states[-1].score:
                         break
                     decoded_t = mt_index[0][new_k]
                     if decoded_t.data[0] >= cfg.vocab_size:
                         decoded_t.data[0] = 2  # unk
                     if self.vocab.decode(decoded_t.data[0]) == cfg.eos_m_token:
+                    if decoded_t.item() >= cfg.vocab_size:
+                        decoded_t.item() = 2  # unk
+                    if self.vocab.decode(decoded_t.item()) == cfg.eos_m_token:
                         if beam_result_valid(state.decoded, bspan_index):
                             finished.append(state)
                             dead_k += 1

@@ -136,9 +136,9 @@ class Model:
                     sup_loss += loss.data.cpu().numpy() #[0]
                     sup_cnt += 1
                     logging.debug(
-                        'loss:{} pr_loss:{} m_loss:{} grad:{}'.format(loss.data,
-                                                                       pr_loss.data,
-                                                                       m_loss.data,
+                        'loss:{} pr_loss:{} m_loss:{} grad:{}'.format(loss.item(),
+                                                                       pr_loss.item(),
+                                                                       m_loss.item(),
                                                                        grad))
 
                     prev_z = turn_batch['bspan']
@@ -207,10 +207,10 @@ class Model:
                                                                     degree_input=degree_input,
                                                                     u_input_np=u_input_np, m_input_np=m_input_np,
                                                                     u_len=u_len, m_len=m_len, mode='train',**kw_ret)
-                sup_loss += loss.data
+                sup_loss += loss.item()
                 sup_cnt += 1
                 logging.debug(
-                    'loss:{} pr_loss:{} m_loss:{}'.format(loss.data, pr_loss.data, m_loss.data))
+                    'loss:{} pr_loss:{} m_loss:{}'.format(loss.item(), pr_loss.item(), m_loss.item()))
 
         sup_loss /= (sup_cnt + 1e-8)
         unsup_loss /= (unsup_cnt + 1e-8)
