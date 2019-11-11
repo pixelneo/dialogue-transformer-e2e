@@ -62,8 +62,7 @@ class _ReaderBase:
             l = sorted(self._freq_dict.keys(), key=lambda x: -self._freq_dict[x])
             print('Actual label size %d' % (len(l) + len(self._idx2item)))
             if len(l) + len(self._idx2item) < limit:
-                logging.warning('actual label set smaller than that configured: {}/{}'
-                                .format(len(l) + len(self._idx2item), limit))
+                logging.warning('actual label set smaller than that configured: {}/{}'.format(len(l) + len(self._idx2item), limit))
             for item in l:
                 if item not in self._item2idx:
                     idx = len(self._idx2item)
@@ -109,7 +108,7 @@ class _ReaderBase:
             return [self.encode(_) for _ in word_list]
 
         def sentence_decode(self, index_list, eos=None):
-            l = [self.decode(_) for _ in index_list]
+            l = [self.decode(i) for i in index_list]
             if not eos or eos not in l:
                 return ' '.join(l)
             else:
@@ -126,6 +125,9 @@ class _ReaderBase:
                 return self._item2idx['<unk>']
 
         def decode(self, idx):
+            if not isinstance(idx, int):
+                idx = idx.item()
+
             if idx < len(self):
                 return self._idx2item[idx]
             else:
@@ -252,8 +254,7 @@ class _ReaderBase:
             self.result_file.write(str(cfg))
             write_header = True
 
-        field = ['dial_id', 'turn_num', 'user', 'generated_bspan', 'bspan', 'generated_response', 'response', 'u_len',
-                 'm_len', 'supervised']
+        field = ['dial_id', 'turn_num', 'user', 'generated_bspan', 'bspan', 'generated_response', 'response', 'u_len', 'm_len', 'supervised']
         for result in results:
             del_k = []
             for k in result:
@@ -491,8 +492,7 @@ class KvretReader(_ReaderBase):
         else:
             self.vocab.load_vocab(cfg.vocab_path)
 
-        self.train, self.dev, self.test = map(self._get_encoded_data, [tokenized_train, tokenized_dev,
-                                                                       tokenized_test])
+        self.train, self.dev, self.test = map(self._get_encoded_data, [tokenized_train, tokenized_dev, tokenized_test])
         random.shuffle(self.train)
         random.shuffle(self.dev)
         random.shuffle(self.test)
@@ -772,15 +772,13 @@ class KvretReader(_ReaderBase):
         return np.array(control_vec)
 
 
-def pad_sequences(sequences, maxlen=None, dtype='int32',
-                  padding='pre', truncating='pre', value=0.):
+def pad_sequences(sequences, maxlen=None, dtype='int32', padding='pre', truncating='pre', value=0.):
     if not hasattr(sequences, '__len__'):
         raise ValueError('`sequences` must be iterable.')
     lengths = []
     for x in sequences:
         if not hasattr(x, '__len__'):
-            raise ValueError('`sequences` must be a list of iterables. '
-                             'Found non-iterable: ' + str(x))
+            raise ValueError('`sequences` must be a list of iterables. Found non-iterable: ' + str(x))
         lengths.append(len(x))
 
     num_samples = len(sequences)
@@ -811,8 +809,7 @@ def pad_sequences(sequences, maxlen=None, dtype='int32',
         # check `trunc` has expected shape
         trunc = np.asarray(trunc, dtype=dtype)
         if trunc.shape[1:] != sample_shape:
-            raise ValueError('Shape of sample %s of sequence at position %s is different from expected shape %s' %
-                             (trunc.shape[1:], idx, sample_shape))
+            raise ValueError('Shape of sample %s of sequence at position %s is different from expected shape %s' % (trunc.shape[1:], idx, sample_shape))
 
         if padding == 'post':
             x[idx, :len(trunc)] = trunc
@@ -852,7 +849,6 @@ def get_glove_matrix(vocab, initial_embedding_np):
     new_avg /= cnt
     new_std /= cnt
     ef.close()
-    logging.info('%d known embedding. old mean: %f new mean %f, old std %f new std %f' % (cnt, old_avg,
-                                                                                          new_avg, old_std, new_std))
+    logging.info('%d known embedding. old mean: %f new mean %f, old std %f new std %f' % (cnt, old_avg, new_avg, old_std, new_std))
     return vec_array
 

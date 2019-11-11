@@ -29,19 +29,19 @@ class Model:
         }
         self.reader = reader_dict[dataset]()
         self.m = model_dict[cfg.m](embed_size=cfg.embedding_size,
-                               hidden_size=cfg.hidden_size,
-                               vocab_size=cfg.vocab_size,
-                               layer_num=cfg.layer_num,
-                               dropout_rate=cfg.dropout_rate,
-                               z_length=cfg.z_length,
-                               max_ts=cfg.max_ts,
-                               beam_search=cfg.beam_search,
-                               beam_size=cfg.beam_size,
-                               eos_token_idx=self.reader.vocab.encode('EOS_M'),
-                               vocab=self.reader.vocab,
-                               teacher_force=cfg.teacher_force,
-                               degree_size=cfg.degree_size,
-                               reader=self.reader)
+                                   hidden_size=cfg.hidden_size,
+                                   vocab_size=cfg.vocab_size,
+                                   layer_num=cfg.layer_num,
+                                   dropout_rate=cfg.dropout_rate,
+                                   z_length=cfg.z_length,
+                                   max_ts=cfg.max_ts,
+                                   beam_search=cfg.beam_search,
+                                   beam_size=cfg.beam_size,
+                                   eos_token_idx=self.reader.vocab.encode('EOS_M'),
+                                   vocab=self.reader.vocab,
+                                   teacher_force=cfg.teacher_force,
+                                   degree_size=cfg.degree_size,
+                                   reader=self.reader)
         self.EV = evaluator_dict[dataset] # evaluator class
         if cfg.cuda: self.m = self.m.cuda()
         self.optim = Adam(lr=cfg.lr, params=filter(lambda x: x.requires_grad, self.m.parameters()),weight_decay=5e-5)
@@ -82,8 +82,7 @@ class Model:
         degree_input_np = np.array(py_batch['degree'])
         u_input_np = pad_sequences(u_input_py, cfg.max_ts, padding='post', truncating='pre').transpose((1, 0))
         z_input_np = pad_sequences(py_batch['bspan'], padding='post').transpose((1, 0))
-        m_input_np = pad_sequences(py_batch['response'], cfg.max_ts, padding='post', truncating='post').transpose(
-            (1, 0))
+        m_input_np = pad_sequences(py_batch['response'], cfg.max_ts, padding='post', truncating='post').transpose((1, 0))
 
         u_len = np.array(u_len_py)
         m_len = np.array(py_batch['m_len'])
@@ -95,8 +94,7 @@ class Model:
 
         kw_ret['z_input_np'] = z_input_np
 
-        return u_input, u_input_np, z_input, m_input, m_input_np,u_len, m_len,  \
-               degree_input, kw_ret
+        return u_input, u_input_np, z_input, m_input, m_input_np,u_len, m_len, degree_input, kw_ret
 
     def train(self):
         lr = cfg.lr
@@ -124,22 +122,18 @@ class Model:
                         = self._convert_batch(turn_batch, prev_z)
 
                     loss, pr_loss, m_loss, turn_states = self.m(u_input=u_input, z_input=z_input,
-                                                                        m_input=m_input,
-                                                                        degree_input=degree_input,
-                                                                        u_input_np=u_input_np,
-                                                                        m_input_np=m_input_np,
-                                                                        turn_states=turn_states,
-                                                                        u_len=u_len, m_len=m_len, mode='train', **kw_ret)
+                                                                m_input=m_input,
+                                                                degree_input=degree_input,
+                                                                u_input_np=u_input_np,
+                                                                m_input_np=m_input_np,
+                                                                turn_states=turn_states,
+                                                                u_len=u_len, m_len=m_len, mode='train', **kw_ret)
                     loss.backward(retain_graph=turn_num != len(dial_batch) - 1)
-                    grad = torch.nn.utils.clip_grad_norm(self.m.parameters(), 5.0)
+                    grad = torch.nn.utils.clip_grad_norm_(self.m.parameters(), 5.0)
                     optim.step()
-                    sup_loss += loss.data.cpu().numpy() #[0]
+                    sup_loss += loss.item()
                     sup_cnt += 1
-                    logging.debug(
-                        'loss:{} pr_loss:{} m_loss:{} grad:{}'.format(loss.data,
-                                                                       pr_loss.data,
-                                                                       m_loss.data,
-                                                                       grad))
+                    logging.debug(f'loss:{loss.item()} pr_loss:{pr_loss.item()} m_loss:{m_loss.item()} grad:{grad}')
 
                     prev_z = turn_batch['bspan']
 
@@ -161,10 +155,9 @@ class Model:
                 lr *= cfg.lr_decay
                 if not early_stop_count:
                     break
-                self.optim = Adam(lr=lr, params=filter(lambda x: x.requires_grad, self.m.parameters()),
-                                  weight_decay=5e-5)
+                self.optim = Adam(lr=lr, params=filter(lambda x: x.requires_grad, self.m.parameters()), weight_decay=5e-5)
                 logging.info('early stop countdown %d, learning rate %f' % (early_stop_count, lr))
-                
+
     def eval(self, data='test'):
         self.m.eval()
         self.reader.result_file = None
@@ -202,15 +195,14 @@ class Model:
                     = self._convert_batch(turn_batch)
 
                 loss, pr_loss, m_loss, turn_states = self.m(u_input=u_input, z_input=z_input,
-                                                                    m_input=m_input,
-                                                                    turn_states=turn_states,
-                                                                    degree_input=degree_input,
-                                                                    u_input_np=u_input_np, m_input_np=m_input_np,
-                                                                    u_len=u_len, m_len=m_len, mode='train',**kw_ret)
-                sup_loss += loss.data
+                                                            m_input=m_input,
+                                                            turn_states=turn_states,
+                                                            degree_input=degree_input,
+                                                            u_input_np=u_input_np, m_input_np=m_input_np,
+                                                            u_len=u_len, m_len=m_len, mode='train',**kw_ret)
+                sup_loss += loss.item()
                 sup_cnt += 1
-                logging.debug(
-                    'loss:{} pr_loss:{} m_loss:{}'.format(loss.data, pr_loss.data, m_loss.data))
+                logging.debug(f'loss:{loss.item()} pr_loss:{pr_loss.item()} m_loss:{m_loss.item()}')
 
         sup_loss /= (sup_cnt + 1e-8)
         unsup_loss /= (unsup_cnt + 1e-8)
@@ -239,13 +231,13 @@ class Model:
                     m_len, degree_input, kw_ret \
                         = self._convert_batch(turn_batch, prev_z)
                     loss_rl = self.m(u_input=u_input, z_input=z_input,
-                                m_input=m_input,
-                                degree_input=degree_input,
-                                u_input_np=u_input_np,
-                                m_input_np=m_input_np,
-                                turn_states=turn_states,
-                                dial_id=turn_batch['dial_id'],
-                                u_len=u_len, m_len=m_len, mode=mode, **kw_ret)
+                                     m_input=m_input,
+                                     degree_input=degree_input,
+                                     u_input_np=u_input_np,
+                                     m_input_np=m_input_np,
+                                     turn_states=turn_states,
+                                     dial_id=turn_batch['dial_id'],
+                                     u_len=u_len, m_len=m_len, mode=mode, **kw_ret)
 
                     if loss_rl is not None:
                         loss = loss_rl #+ loss_mle * 0.1
@@ -254,7 +246,7 @@ class Model:
                         optim.step()
                         epoch_loss += loss.data.cpu().numpy()[0]
                         cnt += 1
-                        logging.debug('{} loss {}, grad:{}'.format(mode,loss.data,grad))
+                        logging.debug(f'{mode} loss {loss.item()}, grad:{grad}')
 
                     prev_z = turn_batch['bspan']
 
