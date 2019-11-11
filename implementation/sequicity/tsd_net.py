@@ -70,7 +70,7 @@ class Attn(nn.Module):
     def forward(self, hidden, encoder_outputs, mask=False, inp_seqs=None, stop_tok=None, normalize=True):
         encoder_outputs = encoder_outputs.transpose(0, 1)  # [B,T,H]
         attn_energies = self.score(hidden, encoder_outputs)
-        if True or not mask:
+        if not mask:
             normalized_energy = F.softmax(attn_energies, dim=2)  # [B,1,T]
         else:
             mask_idx = []
@@ -121,7 +121,6 @@ class SimpleDynamicEncoder(nn.Module):
         :param input_lens: *numpy array* of len for each input sequence
         :return:
         """
-        batch_size = input_seqs.size(1)
         embedded = self.embedding(input_seqs)
         embedded = embedded.transpose(0, 1)  # [B,T,E]
         sort_idx = np.argsort(-input_lens)
@@ -323,71 +322,48 @@ class TSD(nn.Module):
             self.beam_size = kwargs['beam_size']
             self.eos_token_idx = kwargs['eos_token_idx']
 
-    def forward(self, u_input, u_input_np, m_input, m_input_np, z_input, u_len, m_len, turn_states,
-                degree_input, mode, **kwargs):
+    def forward(self, u_input, z_input, m_input, prev_z_input, turn_states, degree_input, mode: str, **kwargs):
         if mode == 'train' or mode == 'valid':
-            pz_proba, pm_dec_proba, turn_states = \
-                self.forward_turn(u_input, u_len, m_input=m_input, m_len=m_len, z_input=z_input, mode='train',
-                                  turn_states=turn_states, degree_input=degree_input, u_input_np=u_input_np,
-                                  m_input_np=m_input_np, **kwargs)
-            loss, pr_loss, m_loss = self.supervised_loss(torch.log(pz_proba), torch.log(pm_dec_proba),
-                                                         z_input, m_input)
+            pz_prob, pm_dec_prob, turn_states = self.forward_turn(u_input, m_input, z_input, prev_z_input, degree_input, mode='train', **kwargs)
+            loss, pr_loss, m_loss = self.supervised_loss(torch.log(pz_prob), torch.log(pm_dec_prob), z_input['tensor'], m_input['tensor'])
             return loss, pr_loss, m_loss, turn_states
 
         elif mode == 'test':
-            m_output_index, pz_index, turn_states = self.forward_turn(u_input, u_len=u_len, mode='test',
-                                                                      turn_states=turn_states,
-                                                                      degree_input=degree_input,
-                                                                      u_input_np=u_input_np, m_input_np=m_input_np,
-                                                                      **kwargs
-                                                                      )
+            m_output_index, pz_index, turn_states = self.forward_turn(u_input, m_input, None, None, degree_input, mode='test', **kwargs)
             return m_output_index, pz_index, turn_states
+
         elif mode == 'rl':
-            loss = self.forward_turn(u_input, u_len=u_len, is_train=False, mode='rl',
-                                     turn_states=turn_states,
-                                     degree_input=degree_input,
-                                     u_input_np=u_input_np, m_input_np=m_input_np,
-                                     **kwargs
-                                     )
+            loss = self.forward_turn(u_input, m_input, None, None, degree_input, is_train=False, mode='rl', **kwargs)
             return loss
 
-    def forward_turn(self, u_input, u_len, turn_states, mode, degree_input, u_input_np, m_input_np=None,
-                     m_input=None, m_len=None, z_input=None, **kwargs):
+    def forward_turn(self, u_input, m_input, z_input, prev_z_input, degree_input, mode: str, **kwargs):
         """
         compute required outputs for a single dialogue turn. Turn state{Dict} will be updated in each call.
-        :param u_input_np:
-        :param m_input_np:
-        :param u_len:
-        :param turn_states:
-        :param is_train:
         :param u_input: [T,B]
         :param m_input: [T,B]
         :param z_input: [T,B]
         :return:
         """
-        prev_z_input = kwargs.get('prev_z_input', None)
-        prev_z_input_np = kwargs.get('prev_z_input_np', None)
-        prev_z_len = kwargs.get('prev_z_len', None)
         pv_z_emb = None
-        batch_size = u_input.size(1)
+        batch_size = u_input['tensor'].size(1)
         pv_z_enc_out = None
 
         if prev_z_input is not None:
-            pv_z_enc_out, _, pv_z_emb = self.u_encoder(prev_z_input, prev_z_len)
-        u_enc_out, u_enc_hidden, u_emb = self.u_encoder(u_input, u_len)
+            pv_z_enc_out, _, pv_z_emb = self.u_encoder(prev_z_input['tensor'], prev_z_input['len'])
+        u_enc_out, u_enc_hidden, u_emb = self.u_encoder(u_input['tensor'], u_input['len'])
         last_hidden = u_enc_hidden[:-1]
         z_tm1 = cuda_(Variable(torch.ones(1, batch_size).long() * 3))  # GO_2 token
         m_tm1 = cuda_(Variable(torch.ones(1, batch_size).long()))  # GO token
         if mode == 'train':
             pz_dec_outs = []
             pz_proba = []
-            z_length = z_input.size(0) if z_input is not None else self.z_length  # GO token
+            z_length = z_input['tensor'].size(0) if z_input is not None else self.z_length  # GO token
             hiddens = [None] * batch_size
             for t in range(z_length):
                 pz_dec_out, last_hidden, proba = \
-                    self.z_decoder(u_enc_out=u_enc_out, u_input_np=u_input_np,
+                    self.z_decoder(u_enc_out=u_enc_out, u_input_np=u_input['np'],
                                    z_tm1=z_tm1, last_hidden=last_hidden,
-                                   pv_z_enc_out=pv_z_enc_out, prev_z_input_np=prev_z_input_np,
+                                   pv_z_enc_out=pv_z_enc_out, prev_z_input_np=prev_z_input['np'] if prev_z_input else None,
                                    u_emb=u_emb, pv_z_emb=pv_z_emb, position=t)
                 pz_proba.append(proba)
                 pz_dec_outs.append(pz_dec_out)
@@ -395,26 +371,24 @@ class TSD(nn.Module):
                 for i in range(batch_size):
                     if z_np[i] == self.vocab.encode('EOS_Z2'):
                         hiddens[i] = last_hidden[:, i, :]
-                z_tm1 = z_input[t].view(1, -1)
+                z_tm1 = z_input['tensor'][t].view(1, -1)
             for i in range(batch_size):
                 if hiddens[i] is None:
                     hiddens[i] = last_hidden[:, i, :]
             last_hidden = torch.stack(hiddens, dim=1)
 
-            z_input_np = z_input.cpu().data.numpy()
-
             pz_dec_outs = torch.cat(pz_dec_outs, dim=0)  # [Tz,B,H]
             pz_proba = torch.stack(pz_proba, dim=0)
             # P(m|z,u)
             pm_dec_proba, m_dec_outs = [], []
-            m_length = m_input.size(0)  # Tm
+            m_length = m_input['tensor'].size(0)  # Tm
             # last_hidden = u_enc_hidden[:-1]
             for t in range(m_length):
                 teacher_forcing = toss_(self.teacher_force)
-                proba, last_hidden, dec_out = self.m_decoder(pz_dec_outs, u_enc_out, u_input_np, m_tm1,
-                                                             degree_input, last_hidden, z_input_np)
+                proba, last_hidden, dec_out = self.m_decoder(pz_dec_outs, u_enc_out, u_input['np'], m_tm1,
+                                                             degree_input, last_hidden, z_input['np'])
                 if teacher_forcing:
-                    m_tm1 = m_input[t].view(1, -1)
+                    m_tm1 = m_input['tensor'][t].view(1, -1)
                 else:
                     _, m_tm1 = torch.topk(proba, 1)
                     m_tm1 = m_tm1.view(1, -1)
@@ -424,26 +398,23 @@ class TSD(nn.Module):
             pm_dec_proba = torch.stack(pm_dec_proba, dim=0)  # [T,B,V]
             return pz_proba, pm_dec_proba, None
         else:
-            pz_dec_outs, bspan_index, last_hidden = self.bspan_decoder(u_enc_out, z_tm1, last_hidden, u_input_np,
+            pz_dec_outs, bspan_index, last_hidden = self.bspan_decoder(u_enc_out, z_tm1, last_hidden, u_input['np'],
                                                                        pv_z_enc_out=pv_z_enc_out,
-                                                                       prev_z_input_np=prev_z_input_np,
+                                                                       prev_z_input_np=prev_z_input['np'] if prev_z_input else None,
                                                                        u_emb=u_emb, pv_z_emb=pv_z_emb)
             pz_dec_outs = torch.cat(pz_dec_outs, dim=0)
             degree_input = self.reader.db_degree_handler(bspan_index, kwargs['dial_id'])
             degree_input = cuda_(Variable(torch.from_numpy(degree_input).float()))
             if mode == 'test':
                 if not self.beam_search:
-                    m_output_index = self.greedy_decode(pz_dec_outs, u_enc_out, m_tm1, u_input_np, last_hidden,
-                                                        degree_input, bspan_index)
+                    m_output_index = self.greedy_decode(pz_dec_outs, u_enc_out, m_tm1, u_input['np'], last_hidden, degree_input, bspan_index)
 
                 else:
-                    m_output_index = self.beam_search_decode(pz_dec_outs, u_enc_out, m_tm1, u_input_np, last_hidden,
-                                                             degree_input, bspan_index)
+                    m_output_index = self.beam_search_decode(pz_dec_outs, u_enc_out, m_tm1, u_input['np'], last_hidden, degree_input, bspan_index)
 
                 return m_output_index, bspan_index, None
             elif mode == 'rl':
-                return self.sampling_decode(pz_dec_outs, u_enc_out, m_tm1, u_input_np, last_hidden,
-                                            degree_input, bspan_index)
+                return self.sampling_decode(pz_dec_outs, u_enc_out, m_tm1, u_input['np'], last_hidden, degree_input, bspan_index)
 
     def bspan_decoder(self, u_enc_out, z_tm1, last_hidden, u_input_np, pv_z_enc_out, prev_z_input_np, u_emb, pv_z_emb):
         pz_dec_outs = []

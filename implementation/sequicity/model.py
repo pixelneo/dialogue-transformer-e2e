@@ -48,9 +48,9 @@ class Model:
         self.base_epoch = -1
 
     def _convert_batch(self, py_batch, prev_z_py=None):
-        u_input_py = py_batch['user']
-        u_len_py = py_batch['u_len']
-        kw_ret = {}
+        u_input_py, u_len_py = py_batch['user'], py_batch['u_len']
+        prev_z_input = None
+
         if cfg.prev_z_method == 'concat' and prev_z_py is not None:
             for i in range(len(u_input_py)):
                 eob = self.reader.vocab.encode('EOS_Z2')
@@ -61,8 +61,8 @@ class Model:
                     u_input_py[i] = prev_z_py[i] + u_input_py[i]
                 u_len_py[i] = len(u_input_py[i])
                 for j, word in enumerate(prev_z_py[i]):
-                    if word >= cfg.vocab_size:
-                        prev_z_py[i][j] = 2 #unk
+                    if word >= cfg.vocab_size: prev_z_py[i][j] = 2 #unk
+
         elif cfg.prev_z_method == 'separate' and prev_z_py is not None:
             for i in range(len(prev_z_py)):
                 eob = self.reader.vocab.encode('EOS_Z2')
@@ -70,67 +70,64 @@ class Model:
                     idx = prev_z_py[i].index(eob)
                     prev_z_py[i] = prev_z_py[i][:idx + 1]
                 for j, word in enumerate(prev_z_py[i]):
-                    if word >= cfg.vocab_size:
-                        prev_z_py[i][j] = 2 #unk
-            prev_z_input_np = pad_sequences(prev_z_py, cfg.max_ts, padding='post', truncating='pre').transpose((1, 0))
-            prev_z_len = np.array([len(_) for _ in prev_z_py])
-            prev_z_input = cuda_(Variable(torch.from_numpy(prev_z_input_np).long()))
-            kw_ret['prev_z_len'] = prev_z_len
-            kw_ret['prev_z_input'] = prev_z_input
-            kw_ret['prev_z_input_np'] = prev_z_input_np
+                    if word >= cfg.vocab_size: prev_z_py[i][j] = 2 #unk
 
-        degree_input_np = np.array(py_batch['degree'])
-        u_input_np = pad_sequences(u_input_py, cfg.max_ts, padding='post', truncating='pre').transpose((1, 0))
-        z_input_np = pad_sequences(py_batch['bspan'], padding='post').transpose((1, 0))
-        m_input_np = pad_sequences(py_batch['response'], cfg.max_ts, padding='post', truncating='post').transpose((1, 0))
+            prev_z_input = pad_sequences(prev_z_py, cfg.max_ts, padding='post', truncating='pre').transpose((1, 0))
+            prev_z_input = {
+                'np': prev_z_input,
+                'len': np.array([len(k) for k in prev_z_py]),
+                'tensor': cuda_(Variable(torch.from_numpy(prev_z_input).long()))
+            }
 
-        u_len = np.array(u_len_py)
-        m_len = np.array(py_batch['m_len'])
+        u_input = pad_sequences(u_input_py, cfg.max_ts, padding='post', truncating='pre').transpose((1, 0))
+        u_input = {
+            'np': u_input,
+            'len': np.array(u_len_py),
+            'tensor': cuda_(Variable(torch.from_numpy(u_input).long()))
+        }
 
-        degree_input = cuda_(Variable(torch.from_numpy(degree_input_np).float()))
-        u_input = cuda_(Variable(torch.from_numpy(u_input_np).long()))
-        z_input = cuda_(Variable(torch.from_numpy(z_input_np).long()))
-        m_input = cuda_(Variable(torch.from_numpy(m_input_np).long()))
+        m_input = pad_sequences(py_batch['response'], cfg.max_ts, padding='post', truncating='post').transpose((1, 0))
+        m_input = {
+            'np': m_input,
+            'len': np.array(py_batch['m_len']),
+            'tensor': cuda_(Variable(torch.from_numpy(m_input).long()))
+        }
 
-        kw_ret['z_input_np'] = z_input_np
+        z_input = pad_sequences(py_batch['bspan'], padding='post').transpose((1, 0))
+        z_input = {
+            'np': z_input,
+            'tensor': cuda_(Variable(torch.from_numpy(z_input).long()))
+        }
 
-        return u_input, u_input_np, z_input, m_input, m_input_np,u_len, m_len, degree_input, kw_ret
+        degree_input = cuda_(Variable(torch.from_numpy(np.array(py_batch['degree'])).float()))
+
+        return u_input, z_input, m_input, prev_z_input, degree_input
 
     def train(self):
-        lr = cfg.lr
-        prev_min_loss, early_stop_count = 1 << 30, cfg.early_stop_count
-        train_time = 0
+        lr, prev_min_loss, early_stop_count, train_time = cfg.lr, 1 << 30, cfg.early_stop_count, 0
+
         for epoch in range(cfg.epoch_num):
-            sw = time.time()
-            if epoch <= self.base_epoch:
-                continue
+            start_time = time.time()
+            if epoch <= self.base_epoch: continue
+
             self.training_adjust(epoch)
             self.m.self_adjust(epoch)
-            sup_loss = 0
-            sup_cnt = 0
-            data_iterator = self.reader.mini_batch_iterator('train')
-            optim = self.optim
-            for iter_num, dial_batch in enumerate(data_iterator):
-                turn_states = {}
-                prev_z = None
-                for turn_num, turn_batch in enumerate(dial_batch):
-                    if cfg.truncated:
-                        logging.debug('iter %d turn %d' % (iter_num, turn_num))
-                    optim.zero_grad()
-                    u_input, u_input_np, z_input, m_input, m_input_np, u_len, \
-                    m_len, degree_input, kw_ret \
-                        = self._convert_batch(turn_batch, prev_z)
+            sup_loss, sup_cnt, optim = 0, 0, self.optim
 
-                    loss, pr_loss, m_loss, turn_states = self.m(u_input=u_input, z_input=z_input,
-                                                                m_input=m_input,
-                                                                degree_input=degree_input,
-                                                                u_input_np=u_input_np,
-                                                                m_input_np=m_input_np,
-                                                                turn_states=turn_states,
-                                                                u_len=u_len, m_len=m_len, mode='train', **kw_ret)
+            for iter_num, dial_batch in enumerate(self.reader.mini_batch_iterator('train')):
+                turn_states, prev_z = {}, None
+
+                for turn_num, turn_batch in enumerate(dial_batch):
+                    if cfg.truncated: logging.debug('iter %d turn %d' % (iter_num, turn_num))
+                    optim.zero_grad()
+
+                    u_input, z_input, m_input, prev_z_input, degree_input = self._convert_batch(turn_batch, prev_z)
+                    loss, pr_loss, m_loss, turn_states = self.m(u_input, z_input, m_input, prev_z_input, turn_states, degree_input, mode='train')
+
                     loss.backward(retain_graph=turn_num != len(dial_batch) - 1)
                     grad = torch.nn.utils.clip_grad_norm_(self.m.parameters(), 5.0)
                     optim.step()
+
                     sup_loss += loss.item()
                     sup_cnt += 1
                     logging.debug(f'loss:{loss.item()} pr_loss:{pr_loss.item()} m_loss:{m_loss.item()} grad:{grad}')
@@ -138,13 +135,13 @@ class Model:
                     prev_z = turn_batch['bspan']
 
             epoch_sup_loss = sup_loss / (sup_cnt + 1e-8)
-            train_time += time.time() - sw
+            train_time += time.time() - start_time
             logging.info('Traning time: {}'.format(train_time))
             logging.info('avg training loss in epoch %d sup:%f' % (epoch, epoch_sup_loss))
 
             valid_sup_loss, valid_unsup_loss = self.validate()
             logging.info('validation loss in epoch %d sup:%f unsup:%f' % (epoch, valid_sup_loss, valid_unsup_loss))
-            logging.info('time for epoch %d: %f' % (epoch, time.time()-sw))
+            logging.info('time for epoch %d: %f' % (epoch, time.time()-start_time))
             valid_loss = valid_sup_loss + valid_unsup_loss
             self.save_model(epoch)
             if valid_loss <= prev_min_loss:
@@ -167,16 +164,11 @@ class Model:
             turn_states = {}
             prev_z = None
             for turn_num, turn_batch in enumerate(dial_batch):
-                u_input, u_input_np, z_input, m_input, m_input_np, u_len, \
-                m_len, degree_input, kw_ret \
-                    = self._convert_batch(turn_batch, prev_z)
-                m_idx, z_idx, turn_states = self.m(mode=mode, u_input=u_input, u_len=u_len, z_input=z_input,
-                                                   m_input=m_input,
-                                                   degree_input=degree_input, u_input_np=u_input_np,
-                                                   m_input_np=m_input_np, m_len=m_len, turn_states=turn_states,
-                                                   dial_id=turn_batch['dial_id'], **kw_ret)
+                u_input, z_input, m_input, prev_z_input, degree_input = self._convert_batch(turn_batch, prev_z)
+                m_idx, z_idx, turn_states = self.m(u_input, z_input, m_input, prev_z_input, turn_states, degree_input, mode, dial_id=turn_batch['dial_id'])
                 self.reader.wrap_result(turn_batch, m_idx, z_idx, prev_z=prev_z)
                 prev_z = z_idx
+
         ev = self.EV(result_path=cfg.result_path)
         res = ev.run_metrics()
         self.m.train()
@@ -190,18 +182,12 @@ class Model:
         for dial_batch in data_iterator:
             turn_states = {}
             for turn_num, turn_batch in enumerate(dial_batch):
-                u_input, u_input_np, z_input, m_input, m_input_np, u_len, \
-                m_len, degree_input, kw_ret \
-                    = self._convert_batch(turn_batch)
+                u_input, z_input, m_input, prev_z_input, degree_input = self._convert_batch(turn_batch)
+                loss, pr_loss, m_loss, turn_states = self.m(u_input, z_input, m_input, prev_z_input, turn_states, degree_input, mode='train')
 
-                loss, pr_loss, m_loss, turn_states = self.m(u_input=u_input, z_input=z_input,
-                                                            m_input=m_input,
-                                                            turn_states=turn_states,
-                                                            degree_input=degree_input,
-                                                            u_input_np=u_input_np, m_input_np=m_input_np,
-                                                            u_len=u_len, m_len=m_len, mode='train',**kw_ret)
                 sup_loss += loss.item()
                 sup_cnt += 1
+
                 logging.debug(f'loss:{loss.item()} pr_loss:{pr_loss.item()} m_loss:{m_loss.item()}')
 
         sup_loss /= (sup_cnt + 1e-8)
@@ -227,17 +213,9 @@ class Model:
                 prev_z = None
                 for turn_num, turn_batch in enumerate(dial_batch):
                     optim.zero_grad()
-                    u_input, u_input_np, z_input, m_input, m_input_np, u_len, \
-                    m_len, degree_input, kw_ret \
-                        = self._convert_batch(turn_batch, prev_z)
-                    loss_rl = self.m(u_input=u_input, z_input=z_input,
-                                     m_input=m_input,
-                                     degree_input=degree_input,
-                                     u_input_np=u_input_np,
-                                     m_input_np=m_input_np,
-                                     turn_states=turn_states,
-                                     dial_id=turn_batch['dial_id'],
-                                     u_len=u_len, m_len=m_len, mode=mode, **kw_ret)
+
+                    u_input, z_input, m_input, prev_z_input, degree_input = self._convert_batch(turn_batch, prev_z)
+                    loss_rl = self.m(u_input, z_input, m_input, prev_z_input, turn_states, degree_input, mode, dial_id=turn_batch['dial_id'])
 
                     if loss_rl is not None:
                         loss = loss_rl #+ loss_mle * 0.1
