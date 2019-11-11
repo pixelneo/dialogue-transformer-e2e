@@ -55,7 +55,7 @@ def init_gru(gru):
     gru.reset_parameters()
     for _, hh, _, _ in gru.all_weights:
         for i in range(0, hh.size(0), gru.hidden_size):
-            torch.nn.init.orthogonal(hh[i:i + gru.hidden_size], gain=1)
+            torch.nn.init.orthogonal_(hh[i:i + gru.hidden_size], gain=1)
 
 
 class Attn(nn.Module):
@@ -94,7 +94,7 @@ class Attn(nn.Module):
     def score(self, hidden, encoder_outputs):
         max_len = encoder_outputs.size(1)
         H = hidden.repeat(max_len, 1, 1).transpose(0, 1)
-        energy = F.tanh(self.attn(torch.cat([H, encoder_outputs], 2)))  # [B,T,2H]->[B,T,H]
+        energy = self.attn(torch.cat([H, encoder_outputs], 2)).tanh()  # [B,T,2H]->[B,T,H]
         energy = energy.transpose(2, 1)  # [B,H,T]
         v = self.v.repeat(encoder_outputs.size(0), 1).unsqueeze(1)  # [B,1,H]
         energy = torch.bmm(v, energy)  # [B,1,T]
@@ -194,7 +194,7 @@ class BSpanDecoder(nn.Module):
         # gru_out = self.inp_dropout(gru_out)
         gen_score = self.proj(torch.cat([gru_out, context], 2)).squeeze(0)
         # gen_score = self.inp_dropout(gen_score)
-        u_copy_score = F.tanh(self.proj_copy1(u_enc_out.transpose(0, 1)))  # [B,T,H]
+        u_copy_score = self.proj_copy1(u_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
         # stable version of copynet
         u_copy_score = torch.matmul(u_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
         u_copy_score = u_copy_score.cpu()
@@ -212,7 +212,7 @@ class BSpanDecoder(nn.Module):
             proba = torch.cat([proba, u_copy_score[:, cfg.vocab_size:]], 1)
         else:
             sparse_pv_z_input = Variable(get_sparse_input_aug(prev_z_input_np), requires_grad=False)
-            pv_z_copy_score = F.tanh(self.proj_copy2(pv_z_enc_out.transpose(0, 1)))  # [B,T,H]
+            pv_z_copy_score = self.proj_copy2(pv_z_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
             pv_z_copy_score = torch.matmul(pv_z_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
             pv_z_copy_score = pv_z_copy_score.cpu()
             pv_z_copy_score_max = torch.max(pv_z_copy_score, dim=1, keepdim=True)[0]
@@ -277,7 +277,7 @@ class ResponseDecoder(nn.Module):
         gru_in = torch.cat([m_embed, u_context, z_context, degree_input.unsqueeze(0)], dim=2)
         gru_out, last_hidden = self.gru(gru_in, last_hidden)
         gen_score = self.proj(torch.cat([z_context, u_context, gru_out], 2)).squeeze(0)
-        z_copy_score = F.tanh(self.proj_copy2(z_enc_out.transpose(0, 1)))
+        z_copy_score = self.proj_copy2(z_enc_out.transpose(0, 1)).tanh()
         z_copy_score = torch.matmul(z_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
         z_copy_score = z_copy_score.cpu()
         z_copy_score_max = torch.max(z_copy_score, dim=1, keepdim=True)[0]
