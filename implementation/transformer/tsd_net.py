@@ -101,8 +101,24 @@ class Attn(nn.Module):
         return energy
 
 
+class PositionalEncoder(nn.Module):
+    def __init__(self, d_model, dropout, max_len=1000):
+        super().__init__()
+        self.pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.dropout = nn.Dropout(p=dropout)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return self.dropout(x)
+
 class SimpleDynamicEncoder(nn.Module):
-    def __init__(self, input_size, embed_size, hidden_size, n_layers, dropout):
+    def __init__(self, input_size, embed_size, hidden_size, n_layers, dropout, d_model, nhead, dim_ff):
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -112,6 +128,15 @@ class SimpleDynamicEncoder(nn.Module):
         self.embedding = nn.Embedding(input_size, embed_size)
         self.gru = nn.GRU(embed_size, hidden_size, n_layers, dropout=self.dropout, bidirectional=True)
         init_gru(self.gru)
+
+        # NEW
+        self.model_type='TransformerEncoder'
+        self.embed_size = embed_size
+        self.positional_encoder = PositionalEncoder(d_model, dropout)
+        encoder_layers = nn.modules.TransformerEncoderLayer(d_model, nhead, dim_ff)
+        self.transformer_encoder = nn.modules.TransformerEncoder(encoder_layers, n_layers)
+        self.embedding = nn.Embedding(input_size, embed_size)
+
 
     def forward(self, input_seqs, input_lens, hidden=None):
         """
@@ -137,6 +162,9 @@ class SimpleDynamicEncoder(nn.Module):
         outputs = outputs.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
         hidden = hidden.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
         return outputs, hidden, embedded
+
+        # NEW
+        
 
 
 class BSpanDecoder(nn.Module):
