@@ -129,7 +129,7 @@ class SimpleDynamicEncoder(nn.Module):
         self.gru = nn.GRU(embed_size, hidden_size, n_layers, dropout=self.dropout, bidirectional=True)
         init_gru(self.gru)
 
-        # NEW
+        # NEW (ondra)
         self.model_type='TransformerEncoder'
         self.embed_size = embed_size
         self.positional_encoder = PositionalEncoder(d_model, dropout)
@@ -163,8 +163,20 @@ class SimpleDynamicEncoder(nn.Module):
         hidden = hidden.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
         return outputs, hidden, embedded
 
-        # NEW
-        
+        # NEW (ondra)
+        batch_size = input_seqs.size(1)
+        embedded = self.embedding(input_seqs)
+        embedded = embedded.transpose(0, 1)  # [B,T,E]
+        sort_idx = np.argsort(-input_lens)
+        unsort_idx = cuda_(torch.LongTensor(np.argsort(sort_idx)))
+        input_lens = input_lens[sort_idx]
+        sort_idx = cuda_(torch.LongTensor(sort_idx))
+        embedded = embedded[sort_idx].transpose(0, 1)  # [T,B,E]
+        embedded = self.positional_encoder(embedded)  # add positional encoding
+
+
+        outputs, hidden = self.transformer_encoder()
+
 
 
 class BSpanDecoder(nn.Module):
