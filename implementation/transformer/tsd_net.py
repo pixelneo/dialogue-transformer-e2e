@@ -119,20 +119,20 @@ class PositionalEncoder(nn.Module):
 
 class SimpleDynamicEncoder(nn.Module):
     def __init__(self, input_size, embed_size, hidden_size, n_layers, dropout, d_model, nhead, dim_ff):
-        super().__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.embed_size = embed_size
-        self.n_layers = n_layers
-        self.dropout = dropout
-        self.embedding = nn.Embedding(input_size, embed_size)
-        self.gru = nn.GRU(embed_size, hidden_size, n_layers, dropout=self.dropout, bidirectional=True)
-        init_gru(self.gru)
+        # super().__init__()
+        # self.input_size = input_size
+        # self.hidden_size = hidden_size
+        # self.embed_size = embed_size
+        # self.n_layers = n_layers
+        # self.dropout = dropout
+        # self.embedding = nn.Embedding(input_size, embed_size)
+        # self.gru = nn.GRU(embed_size, hidden_size, n_layers, dropout=self.dropout, bidirectional=True)
+        # init_gru(self.gru)
 
         # NEW (ondra)
+        super().__init__()
         self.model_type='TransformerEncoder'
-        self.embed_size = embed_size
-        self.positional_encoder = PositionalEncoder(d_model, dropout)
+        self.positional_encoder = PositionalEncoder(d_model, dropout, self.cfg.max_ts)
         encoder_layers = nn.modules.TransformerEncoderLayer(d_model, nhead, dim_ff)
         self.transformer_encoder = nn.modules.TransformerEncoder(encoder_layers, n_layers)
         self.embedding = nn.Embedding(input_size, embed_size)
@@ -146,71 +146,72 @@ class SimpleDynamicEncoder(nn.Module):
         :param input_lens: *numpy array* of len for each input sequence
         :return:
         """
-        batch_size = input_seqs.size(1)
-        embedded = self.embedding(input_seqs)
-        embedded = embedded.transpose(0, 1)  # [B,T,E]
-        sort_idx = np.argsort(-input_lens)
-        unsort_idx = cuda_(torch.LongTensor(np.argsort(sort_idx)))
-        input_lens = input_lens[sort_idx]
-        sort_idx = cuda_(torch.LongTensor(sort_idx))
-        embedded = embedded[sort_idx].transpose(0, 1)  # [T,B,E]
-        packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, input_lens)
-        outputs, hidden = self.gru(packed, hidden)
+        # batch_size = input_seqs.size(1)
+        # embedded = self.embedding(input_seqs)
+        # embedded = embedded.transpose(0, 1)  # [B,T,E]
+        # sort_idx = np.argsort(-input_lens)
+        # unsort_idx = cuda_(torch.LongTensor(np.argsort(sort_idx)))
+        # input_lens = input_lens[sort_idx]
+        # sort_idx = cuda_(torch.LongTensor(sort_idx))
+        # embedded = embedded[sort_idx].transpose(0, 1)  # [T,B,E]
+        # packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, input_lens)
+        # outputs, hidden = self.gru(packed, hidden)
 
-        outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(outputs)
-        outputs = outputs[:, :, :self.hidden_size] + outputs[:, :, self.hidden_size:]
-        outputs = outputs.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
-        hidden = hidden.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
-        return outputs, hidden, embedded
+        # outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(outputs)
+        # outputs = outputs[:, :, :self.hidden_size] + outputs[:, :, self.hidden_size:]
+        # outputs = outputs.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
+        # hidden = hidden.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
+        # return outputs, hidden, embedded
 
         # NEW (ondra)
-        batch_size = input_seqs.size(1)
         embedded = self.embedding(input_seqs)
-        embedded = embedded.transpose(0, 1)  # [B,T,E]
-        sort_idx = np.argsort(-input_lens)
-        unsort_idx = cuda_(torch.LongTensor(np.argsort(sort_idx)))
-        input_lens = input_lens[sort_idx]
-        sort_idx = cuda_(torch.LongTensor(sort_idx))
-        embedded = embedded[sort_idx].transpose(0, 1)  # [T,B,E]
+
+        # (ondra): probably dont need this - it is done because of RNN performance issues on GPU (?)
+        # embedded = embedded.transpose(0, 1)  # [B,T,E]
+        # sort_idx = np.argsort(-input_lens)
+        # unsort_idx = cuda_(torch.LongTensor(np.argsort(sort_idx)))
+        # input_lens = input_lens[sort_idx]
+        # sort_idx = cuda_(torch.LongTensor(sort_idx))
+        # embedded = embedded[sort_idx].transpose(0, 1)  # [T,B,E]
+
         embedded = self.positional_encoder(embedded)  # add positional encoding
-
-
-        outputs, hidden = self.transformer_encoder()
+        # (ondra): should a mask be here?
+        outputs = self.transformer_encoder(embedded)
+        return outputs, embedded
 
 
 
 class BSpanDecoder(nn.Module):
     def __init__(self, embed_size, hidden_size, vocab_size, dropout_rate, vocab, d_model, nhead, dim_ff):
-        super().__init__()
-        self.emb = nn.Embedding(vocab_size, embed_size)
-        if cfg.use_positional_embedding:
-            self.positional_embedding = nn.Embedding(cfg.max_ts + 1, embed_size)
-            init_pos_emb = self.position_encoding_init(cfg.max_ts + 1, embed_size)
-            self.positional_embedding.weight.data = init_pos_emb
-        self.gru = nn.GRU(hidden_size + embed_size, hidden_size, dropout=dropout_rate)
-        self.proj = nn.Linear(hidden_size * 2, vocab_size)
+        # super().__init__()
+        # self.emb = nn.Embedding(vocab_size, embed_size)
+        # if cfg.use_positional_embedding:
+            # self.positional_embedding = nn.Embedding(cfg.max_ts + 1, embed_size)
+            # init_pos_emb = self.position_encoding_init(cfg.max_ts + 1, embed_size)
+            # self.positional_embedding.weight.data = init_pos_emb
+        # self.gru = nn.GRU(hidden_size + embed_size, hidden_size, dropout=dropout_rate)
+        # self.proj = nn.Linear(hidden_size * 2, vocab_size)
 
-        self.attn_u = Attn(hidden_size)
-        self.proj_copy1 = nn.Linear(hidden_size, hidden_size)
-        self.proj_copy2 = nn.Linear(hidden_size, hidden_size)
-        self.dropout_rate = dropout_rate
+        # self.attn_u = Attn(hidden_size)
+        # self.proj_copy1 = nn.Linear(hidden_size, hidden_size)
+        # self.proj_copy2 = nn.Linear(hidden_size, hidden_size)
+        # self.dropout_rate = dropout_rate
 
-        self.inp_dropout = nn.Dropout(self.dropout_rate)
+        # self.inp_dropout = nn.Dropout(self.dropout_rate)
 
-        init_gru(self.gru)
-        self.vocab = vocab
+        # init_gru(self.gru)
+        # self.vocab = vocab
 
         # NEW (ondra)
         super().__init__()
-        self.emb = nn.Embedding(vocab_size, embed_size)
-        if cfg.use_positional_embedding:
-            self.positional_embedding = nn.Embedding(cfg.max_ts + 1, embed_size)
-            init_pos_emb = self.position_encoding_init(cfg.max_ts + 1, embed_size)
-            self.positional_embedding.weight.data = init_pos_emb
+        # self.emb = nn.Embedding(vocab_size, embed_size)
+        # if cfg.use_positional_embedding:
+            # self.positional_embedding = nn.Embedding(cfg.max_ts + 1, embed_size)
+            # init_pos_emb = self.position_encoding_init(cfg.max_ts + 1, embed_size)
+            # self.positional_embedding.weight.data = init_pos_emb
 
         self.model_type='TransformerDecoder'
-        self.embed_size = embed_size
-        self.positional_encoder = PositionalEncoder(d_model, dropout)
+        self.positional_encoder = PositionalEncoder(d_model, dropout, self.cfg.max_ts)
         decoder_layers = nn.modules.TransformerDecoderLayer(d_model, nhead, dim_ff)
         self.transformer_decoder = nn.modules.TransformerDecoder(decoder_layers, n_layers)
 
