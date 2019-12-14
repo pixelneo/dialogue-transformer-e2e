@@ -180,7 +180,7 @@ class SimpleDynamicEncoder(nn.Module):
 
 
 class BSpanDecoder(nn.Module):
-    def __init__(self, embed_size, hidden_size, vocab_size, dropout_rate, vocab):
+    def __init__(self, embed_size, hidden_size, vocab_size, dropout_rate, vocab, d_model, nhead, dim_ff):
         super().__init__()
         self.emb = nn.Embedding(vocab_size, embed_size)
         if cfg.use_positional_embedding:
@@ -199,6 +199,30 @@ class BSpanDecoder(nn.Module):
 
         init_gru(self.gru)
         self.vocab = vocab
+
+        # NEW (ondra)
+        super().__init__()
+        self.emb = nn.Embedding(vocab_size, embed_size)
+        if cfg.use_positional_embedding:
+            self.positional_embedding = nn.Embedding(cfg.max_ts + 1, embed_size)
+            init_pos_emb = self.position_encoding_init(cfg.max_ts + 1, embed_size)
+            self.positional_embedding.weight.data = init_pos_emb
+
+        self.model_type='TransformerDecoder'
+        self.embed_size = embed_size
+        self.positional_encoder = PositionalEncoder(d_model, dropout)
+        decoder_layers = nn.modules.TransformerDecoderLayer(d_model, nhead, dim_ff)
+        self.transformer_decoder = nn.modules.TransformerDecoder(decoder_layers, n_layers)
+
+        self.attn_u = Attn(hidden_size)
+        self.proj_copy1 = nn.Linear(hidden_size, hidden_size)
+        self.proj_copy2 = nn.Linear(hidden_size, hidden_size)
+        self.dropout_rate = dropout_rate
+
+        self.inp_dropout = nn.Dropout(self.dropout_rate)
+
+        self.vocab = vocab
+
 
     def position_encoding_init(self, n_position, d_pos_vec):
         position_enc = np.array([[pos / np.power(10000, 2 * (j // 2) / d_pos_vec) for j in range(d_pos_vec)]
@@ -336,14 +360,14 @@ class ResponseDecoder(nn.Module):
 
 class TSD(nn.Module):
     def __init__(self, embed_size, hidden_size, vocab_size, degree_size, layer_num, dropout_rate, z_length,
-                 max_ts, beam_search=False, teacher_force=100, **kwargs):
+                 max_ts, d_model, nhead, dim_ff, beam_search=False, teacher_force=100, **kwargs):
         super().__init__()
         self.vocab = kwargs['vocab']
         self.reader = kwargs['reader']
         self.emb = nn.Embedding(vocab_size, embed_size)
         self.dec_gru = nn.GRU(degree_size + embed_size + hidden_size * 2, hidden_size, dropout=dropout_rate)
         self.proj = nn.Linear(hidden_size * 3, vocab_size)
-        self.u_encoder = SimpleDynamicEncoder(vocab_size, embed_size, hidden_size, layer_num, dropout_rate)
+        self.u_encoder = SimpleDynamicEncoder(vocab_size, embed_size, hidden_size, layer_num, dropout_rate, d_model, nhead, dim_ff)
         self.z_decoder = BSpanDecoder(embed_size, hidden_size, vocab_size, dropout_rate, self.vocab)
         self.m_decoder = ResponseDecoder(embed_size, hidden_size, vocab_size, degree_size, dropout_rate,
                                          self.dec_gru, self.proj, self.emb, self.vocab)
