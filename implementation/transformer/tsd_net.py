@@ -119,16 +119,6 @@ class PositionalEncoder(nn.Module):
 
 class SimpleDynamicEncoder(nn.Module):
     def __init__(self, input_size, embed_size, hidden_size, n_layers, dropout, d_model, nhead, dim_ff):
-        # super().__init__()
-        # self.input_size = input_size
-        # self.hidden_size = hidden_size
-        # self.embed_size = embed_size
-        # self.n_layers = n_layers
-        # self.dropout = dropout
-        # self.embedding = nn.Embedding(input_size, embed_size)
-        # self.gru = nn.GRU(embed_size, hidden_size, n_layers, dropout=self.dropout, bidirectional=True)
-        # init_gru(self.gru)
-
         # NEW (ondra)
         super().__init__()
         self.model_type='TransformerEncoder'
@@ -175,7 +165,7 @@ class SimpleDynamicEncoder(nn.Module):
         # embedded = embedded[sort_idx].transpose(0, 1)  # [T,B,E]
 
         embedded = self.positional_encoder(embedded)  # add positional encoding
-        # (ondra): should a mask be here?
+        # (ondra): do not need to return 'hidden' representation
         outputs = self.transformer_encoder(embedded)
         return outputs, embedded
 
@@ -215,7 +205,8 @@ class BSpanDecoder(nn.Module):
         decoder_layers = nn.modules.TransformerDecoderLayer(d_model, nhead, dim_ff)
         self.transformer_decoder = nn.modules.TransformerDecoder(decoder_layers, n_layers)
 
-        self.attn_u = Attn(hidden_size)
+        # self.attn_u = Attn(hidden_size)  # useless IMHO
+        # (ondra): a mask should be here?
         self.proj_copy1 = nn.Linear(hidden_size, hidden_size)
         self.proj_copy2 = nn.Linear(hidden_size, hidden_size)
         self.dropout_rate = dropout_rate
@@ -235,74 +226,9 @@ class BSpanDecoder(nn.Module):
 
     def forward(self, u_enc_out, z_tm1, last_hidden, u_input_np, pv_z_enc_out, prev_z_input_np, u_emb, pv_z_emb,
                 position):
-
-        # # Notes (ondra):
-        # # `pv_z_enc_out` is the output of encoder
-
-        # # (ondra) what is this??
-        # sparse_u_input = Variable(get_sparse_input_aug(u_input_np), requires_grad=False)
-
-        # if pv_z_enc_out is not None:
-            # context = self.attn_u(last_hidden, torch.cat([pv_z_enc_out, u_enc_out], dim=0), mask=True,
-                                  # inp_seqs=np.concatenate([prev_z_input_np, u_input_np], 0),
-                                  # stop_tok=[self.vocab.encode('EOS_M')])
-        # else:
-            # # (ondra) when does this happen?
-            # context = self.attn_u(last_hidden, u_enc_out, mask=True, inp_seqs=u_input_np,
-                                  # stop_tok=[self.vocab.encode('EOS_M')])
-        # embed_z = self.emb(z_tm1)
-        # # embed_z = self.inp_dropout(embed_z)
-
-        # if cfg.use_positional_embedding:  # defaulty not used
-            # position_label = [position] * u_enc_out.size(1)  # [B]
-            # position_label = cuda_(Variable(torch.LongTensor(position_label))).view(1, -1)  # [1,B]
-            # pos_emb = self.positional_embedding(position_label)
-            # embed_z = embed_z + pos_emb
-
-        # gru_in = torch.cat([embed_z, context], 2)
-        # gru_out, last_hidden = self.gru(gru_in, last_hidden)
-        # # gru_out = self.inp_dropout(gru_out)
-        # gen_score = self.proj(torch.cat([gru_out, context], 2)).squeeze(0)
-        # # gen_score = self.inp_dropout(gen_score)
-        # u_copy_score = self.proj_copy1(u_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
-        # # stable version of copynet
-        # u_copy_score = torch.matmul(u_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
-        # u_copy_score = u_copy_score.cpu()
-        # u_copy_score_max = torch.max(u_copy_score, dim=1, keepdim=True)[0]
-        # u_copy_score = torch.exp(u_copy_score - u_copy_score_max)  # [B,T]
-        # u_copy_score = torch.log(torch.bmm(u_copy_score.unsqueeze(1), sparse_u_input)).squeeze(
-            # 1) + u_copy_score_max  # [B,V]
-        # u_copy_score = cuda_(u_copy_score)
-        # if pv_z_enc_out is None:
-            # # u_copy_score = self.inp_dropout(u_copy_score)
-            # scores = F.softmax(torch.cat([gen_score, u_copy_score], dim=1), dim=1)
-            # gen_score, u_copy_score = scores[:, :cfg.vocab_size], \
-                                      # scores[:, cfg.vocab_size:]
-            # proba = gen_score + u_copy_score[:, :cfg.vocab_size]  # [B,V]
-            # proba = torch.cat([proba, u_copy_score[:, cfg.vocab_size:]], 1)
-        # else:
-            # sparse_pv_z_input = Variable(get_sparse_input_aug(prev_z_input_np), requires_grad=False)
-            # pv_z_copy_score = self.proj_copy2(pv_z_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
-            # pv_z_copy_score = torch.matmul(pv_z_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
-            # pv_z_copy_score = pv_z_copy_score.cpu()
-            # pv_z_copy_score_max = torch.max(pv_z_copy_score, dim=1, keepdim=True)[0]
-            # pv_z_copy_score = torch.exp(pv_z_copy_score - pv_z_copy_score_max)  # [B,T]
-            # pv_z_copy_score = torch.log(torch.bmm(pv_z_copy_score.unsqueeze(1), sparse_pv_z_input)).squeeze(
-                # 1) + pv_z_copy_score_max  # [B,V]
-            # pv_z_copy_score = cuda_(pv_z_copy_score)
-            # scores = F.softmax(torch.cat([gen_score, u_copy_score, pv_z_copy_score], dim=1), dim=1)
-            # gen_score, u_copy_score, pv_z_copy_score = scores[:, :cfg.vocab_size], \
-                                                       # scores[:,
-                                                       # cfg.vocab_size:2 * cfg.vocab_size + u_input_np.shape[0]], \
-                                                       # scores[:, 2 * cfg.vocab_size + u_input_np.shape[0]:]
-            # proba = gen_score + u_copy_score[:, :cfg.vocab_size] + pv_z_copy_score[:, :cfg.vocab_size]  # [B,V]
-            # proba = torch.cat([proba, pv_z_copy_score[:, cfg.vocab_size:], u_copy_score[:, cfg.vocab_size:]], 1)
-        # return gru_out, last_hidden, proba
-
-
         # NEW (ondra)
         # Notes (ondra):
-        # `pv_z_enc_out` is the output of encoder
+        # `pv_z_enc_out` is "previous_z_encoder_output" 
 
         # (ondra) what is this??
         sparse_u_input = Variable(get_sparse_input_aug(u_input_np), requires_grad=False)
@@ -324,14 +250,16 @@ class BSpanDecoder(nn.Module):
             pos_emb = self.positional_embedding(position_label)
             embed_z = embed_z + pos_emb
 
-        gru_in = torch.cat([embed_z, context], 2)
-        gru_out, last_hidden = self.gru(gru_in, last_hidden)
+        input_to_transformer = embed_z #torch.cat([embed_z, context], 2)
+
+        # TODO (ondra): add mask to the decoder
+        dec_out = self.transformer_decoder(input_to_transformer, u_enc_out)
         # gru_out = self.inp_dropout(gru_out)
-        gen_score = self.proj(torch.cat([gru_out, context], 2)).squeeze(0)
+        gen_score = self.proj(dec_out).squeeze(0)
         # gen_score = self.inp_dropout(gen_score)
         u_copy_score = self.proj_copy1(u_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
         # stable version of copynet
-        u_copy_score = torch.matmul(u_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
+        u_copy_score = torch.matmul(u_copy_score, dec_out.squeeze(0).unsqueeze(2)).squeeze(2)
         u_copy_score = u_copy_score.cpu()
         u_copy_score_max = torch.max(u_copy_score, dim=1, keepdim=True)[0]
         u_copy_score = torch.exp(u_copy_score - u_copy_score_max)  # [B,T]
@@ -348,7 +276,7 @@ class BSpanDecoder(nn.Module):
         else:
             sparse_pv_z_input = Variable(get_sparse_input_aug(prev_z_input_np), requires_grad=False)
             pv_z_copy_score = self.proj_copy2(pv_z_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
-            pv_z_copy_score = torch.matmul(pv_z_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
+            pv_z_copy_score = torch.matmul(pv_z_copy_score, dec_out.squeeze(0).unsqueeze(2)).squeeze(2)
             pv_z_copy_score = pv_z_copy_score.cpu()
             pv_z_copy_score_max = torch.max(pv_z_copy_score, dim=1, keepdim=True)[0]
             pv_z_copy_score = torch.exp(pv_z_copy_score - pv_z_copy_score_max)  # [B,T]
@@ -362,7 +290,7 @@ class BSpanDecoder(nn.Module):
                                                        scores[:, 2 * cfg.vocab_size + u_input_np.shape[0]:]
             proba = gen_score + u_copy_score[:, :cfg.vocab_size] + pv_z_copy_score[:, :cfg.vocab_size]  # [B,V]
             proba = torch.cat([proba, pv_z_copy_score[:, cfg.vocab_size:], u_copy_score[:, cfg.vocab_size:]], 1)
-        return gru_out, last_hidden, proba
+        return dec_out, last_hidden, proba
 
 
 
