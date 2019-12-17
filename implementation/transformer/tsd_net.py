@@ -300,8 +300,12 @@ class ResponseDecoder(nn.Module):
         self.emb = emb
         self.attn_z = Attn(hidden_size)
         self.attn_u = Attn(hidden_size)
-        self.gru = gru
-        init_gru(self.gru)
+        # self.gru = gru
+        # init_gru(self.gru)
+        # NEW
+        decoder_layers = nn.modules.TransformerDecoderLayer(d_model, nhead, dim_ff)
+        self.transformer_decoder = nn.modules.TransformerDecoder(decoder_layers, n_layers)
+
         self.proj = proj
         self.proj_copy1 = nn.Linear(hidden_size, hidden_size)
         self.proj_copy2 = nn.Linear(hidden_size, hidden_size)
@@ -365,12 +369,16 @@ class TSD(nn.Module):
         self.vocab = kwargs['vocab']
         self.reader = kwargs['reader']
         self.emb = nn.Embedding(vocab_size, embed_size)
-        self.dec_gru = nn.GRU(degree_size + embed_size + hidden_size * 2, hidden_size, dropout=dropout_rate)
+        # Not needed now
+        # self.dec_gru = nn.GRU(degree_size + embed_size + hidden_size * 2, hidden_size, dropout=dropout_rate)
         self.proj = nn.Linear(hidden_size * 3, vocab_size)
         self.u_encoder = SimpleDynamicEncoder(vocab_size, embed_size, hidden_size, layer_num, dropout_rate, d_model, nhead, dim_ff)
         self.z_decoder = BSpanDecoder(embed_size, hidden_size, vocab_size, dropout_rate, self.vocab)
+        # ResponseDecoder has one parameter less
+        # self.m_decoder = ResponseDecoder(embed_size, hidden_size, vocab_size, degree_size, dropout_rate,
+                                         # self.dec_gru, self.proj, self.emb, self.vocab)
         self.m_decoder = ResponseDecoder(embed_size, hidden_size, vocab_size, degree_size, dropout_rate,
-                                         self.dec_gru, self.proj, self.emb, self.vocab)
+                                                         self.proj, self.emb, self.vocab)
         self.embed_size = embed_size
 
         self.z_length = z_length
