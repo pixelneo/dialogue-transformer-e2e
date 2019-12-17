@@ -335,6 +335,8 @@ class ResponseDecoder(nn.Module):
         return result
 
     def forward(self, z_enc_out, u_enc_out, u_input_np, m_t_input, degree_input, last_hidden, z_input_np):
+
+        # (ondra) what is this?
         sparse_z_input = Variable(self.get_sparse_selective_input(z_input_np), requires_grad=False)
 
         m_embed = self.emb(m_t_input)
