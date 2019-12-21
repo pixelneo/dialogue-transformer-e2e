@@ -136,6 +136,10 @@ class SimpleDynamicEncoder(nn.Module):
         outputs = outputs[:, :, :self.hidden_size] + outputs[:, :, self.hidden_size:]
         outputs = outputs.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
         hidden = hidden.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
+        
+        # outputs are the 'hidden' states of the last gru layer
+        # hidden are the hidden states of the last time-step in each layer 
+        # embedded are just the embedding for inputs
         return outputs, hidden, embedded
 
 
@@ -174,12 +178,18 @@ class BSpanDecoder(nn.Module):
         sparse_u_input = Variable(get_sparse_input_aug(u_input_np), requires_grad=False)
 
         if pv_z_enc_out is not None:
+            # IHMO we are at least 2nd time step. so this is just longer context (where does this apper in the paper?)
             context = self.attn_u(last_hidden, torch.cat([pv_z_enc_out, u_enc_out], dim=0), mask=True,
                                   inp_seqs=np.concatenate([prev_z_input_np, u_input_np], 0),
                                   stop_tok=[self.vocab.encode('EOS_M')])
         else:
+            # no previous encoder output => 1st time step
             context = self.attn_u(last_hidden, u_enc_out, mask=True, inp_seqs=u_input_np,
                                   stop_tok=[self.vocab.encode('EOS_M')])
+        
+        # embedding of GO token
+        # see main training loop (forward_turn func):
+        # cuda_(Variable(torch.ones(1, batch_size).long() * 3))  # GO_2 token
         embed_z = self.emb(z_tm1)
         # embed_z = self.inp_dropout(embed_z)
 
@@ -189,9 +199,12 @@ class BSpanDecoder(nn.Module):
             pos_emb = self.positional_embedding(position_label)
             embed_z = embed_z + pos_emb
 
+        # concatenate attention weighted encoder output with GO token
         gru_in = torch.cat([embed_z, context], 2)
         gru_out, last_hidden = self.gru(gru_in, last_hidden)
         # gru_out = self.inp_dropout(gru_out)
+         
+        # simple 'generate' (as oppose to copy) score (see eq. 3)
         gen_score = self.proj(torch.cat([gru_out, context], 2)).squeeze(0)
         # gen_score = self.inp_dropout(gen_score)
         u_copy_score = self.proj_copy1(u_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
@@ -365,8 +378,8 @@ class TSD(nn.Module):
         :param z_input: [T,B]
         :return:
         """
-        prev_z_input = kwargs.get('prev_z_input', None)
-        prev_z_input_np = kwargs.get('prev_z_input_np', None)
+        prev_z_input = kwargs.get('prev_z_input', None)  # previous BSpan (as a 'cuda_' variable)
+        prev_z_input_np = kwargs.get('prev_z_input_np', None)  # previous bspan 
         prev_z_len = kwargs.get('prev_z_len', None)
         pv_z_emb = None
         batch_size = u_input.size(1)
