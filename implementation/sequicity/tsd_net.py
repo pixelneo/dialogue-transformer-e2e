@@ -209,6 +209,9 @@ class BSpanDecoder(nn.Module):
         # gen_score = self.inp_dropout(gen_score)
         u_copy_score = self.proj_copy1(u_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
         # stable version of copynet
+        
+        # TODO this i know is copy score, however what the three (un)squeezes do, i do not know 
+        # (ie  what shape it had and why it has to change it twice)
         u_copy_score = torch.matmul(u_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
         u_copy_score = u_copy_score.cpu()
         u_copy_score_max = torch.max(u_copy_score, dim=1, keepdim=True)[0]
