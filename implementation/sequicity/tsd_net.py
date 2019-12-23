@@ -221,12 +221,20 @@ class BSpanDecoder(nn.Module):
         u_copy_score = cuda_(u_copy_score)
         if pv_z_enc_out is None:
             # u_copy_score = self.inp_dropout(u_copy_score)
+            
+            # concat generate and copy scores (for each slot) and do softmax
             scores = F.softmax(torch.cat([gen_score, u_copy_score], dim=1), dim=1)
+            # first part is for generation and the second for copy score 
             gen_score, u_copy_score = scores[:, :cfg.vocab_size], \
                                       scores[:, cfg.vocab_size:]
+            # sum of generate probability and copy probability (?) as in the orig. copy attn paper
+            # TODO why u_copy_score[:, :cfg.vocab_size]
             proba = gen_score + u_copy_score[:, :cfg.vocab_size]  # [B,V]
+            # TODO what is this?
             proba = torch.cat([proba, u_copy_score[:, cfg.vocab_size:]], 1)
         else:
+            # IHMO also compute copy probability from the encoder output from the previous time step
+            # and concat it 
             sparse_pv_z_input = Variable(get_sparse_input_aug(prev_z_input_np), requires_grad=False)
             pv_z_copy_score = self.proj_copy2(pv_z_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
             pv_z_copy_score = torch.matmul(pv_z_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
