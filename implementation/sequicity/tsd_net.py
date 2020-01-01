@@ -294,12 +294,19 @@ class ResponseDecoder(nn.Module):
         sparse_z_input = Variable(self.get_sparse_selective_input(z_input_np), requires_grad=False)
 
         m_embed = self.emb(m_t_input)
+        
+        # z_enc_out are stacked (along the time-step axis) outputs of the BSpan decoder
         z_context = self.attn_z(last_hidden, z_enc_out, mask=True, stop_tok=[self.vocab.encode('EOS_Z2')],
                                 inp_seqs=z_input_np)
+        # u_enc_out are output from the encoder
         u_context = self.attn_u(last_hidden, u_enc_out, mask=True, stop_tok=[self.vocab.encode('EOS_M')],
                                 inp_seqs=u_input_np)
+                                
+        # TODO what is degree_input? it is coming from the data
         gru_in = torch.cat([m_embed, u_context, z_context, degree_input.unsqueeze(0)], dim=2)
         gru_out, last_hidden = self.gru(gru_in, last_hidden)
+        
+        # following lines are similar to the previous classes
         gen_score = self.proj(torch.cat([z_context, u_context, gru_out], 2)).squeeze(0)
         z_copy_score = self.proj_copy2(z_enc_out.transpose(0, 1)).tanh()
         z_copy_score = torch.matmul(z_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
