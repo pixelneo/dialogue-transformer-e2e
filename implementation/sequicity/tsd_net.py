@@ -13,6 +13,67 @@ from torch.distributions import Categorical
 from reader import pad_sequences
 
 
+"""
+--------------------------------------------------------------------------------
+Naming
+--------------------------------------------------------------------------------
+    u_ is user input
+    z_ is bspan
+    m_ is machine response
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+Algorithm description
+--------------------------------------------------------------------------------
+In each turn, `t`, we take as input:
+    B(t-1) = belief span (=bspan) from the previous turn
+    R(t-1) = machine response from the previous turn
+    U(t) = the current user utterance
+Then, we execute the following steps:
+    1) Encode B(t-1)R(t-1)U(t) ... inspired from encoder-decoder ...
+        - in pure encoder-decoder, this would encode into a fixed sized vector
+        - however, we use attention, thus into a sequence of hidden states
+    2) Decode B(t)
+        - Uses BSpanDecoder
+        - (bspan_decoder is used unless training)
+    3) Knowledge-base search
+    4) Decode R(t)
+        - Uses ResponseDecoder
+        - (greedy_decode is used unless training)
+
+When training, bspan_decoder and greedy_decode are not used, instead spaghetti
+code with copy/pastes from the two functions...
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+Search type (beam/greedy/sampling)
+--------------------------------------------------------------------------------
+What is beam search used for?
+    - It doesn't need to be used. Greedy search is fine.
+
+Either greedy_decode or beam_search_decode or sampling_decode can be used.
+For now, let's be only concerned with greedy_decode for simplicity
+
+`sampling_decode` is another name for the optional "Reinforcement finetuing"
+step.
+
+TODO: What is greedy search used for?
+    - It invokes ResponseDecoder (however, not in training)
+--------------------------------------------------------------------------------
+
+
+--------------------------------------------------------------------------------
+Decoders
+--------------------------------------------------------------------------------
+TODO: What is the difference in implementation between BSpanDecoder and
+ResponseDecoder?
+
+BSpanDecoder's implementation is more complicated because in uses longer
+context. See code sections in the if `if pv_z_enc_out is None:`.
+--------------------------------------------------------------------------------
+"""
+
+
 def cuda_(var):
     return var.cuda() if cfg.cuda else var
 
@@ -59,6 +120,10 @@ def init_gru(gru):
 
 
 class Attn(nn.Module):
+    """
+    Attention implementation for standard GRU seq2seq with attention.
+    This will not be needed for our new "Transformer implementation".
+    """
     def __init__(self, hidden_size):
         super(Attn, self).__init__()
         self.hidden_size = hidden_size
@@ -102,6 +167,21 @@ class Attn(nn.Module):
 
 
 class SimpleDynamicEncoder(nn.Module):
+    """
+    This class should be replaced by a TransformerEncoder using
+    nn.modules.TransformerEncoderLayer. Also, implement dropout.
+
+    In the transformer branch, @pixelneo wrote PositionalEncoder.
+    I beleive that he is contatenating each input token with its position.
+    However, I do not understant the formulas - why exp, 10000.0, sin, cos...?
+    @pixelneo, could you please add some documentation?
+
+    Also, where is the positional information being added in
+    SimpleDynamicEncoder? I don't see the same formulas here.
+    Did you move code from BSpanDecoder.position_encoding_init into the
+    Encoder? If yes, why the change?
+    """
+
     def __init__(self, input_size, embed_size, hidden_size, n_layers, dropout):
         super().__init__()
         self.input_size = input_size
@@ -193,6 +273,11 @@ class BSpanDecoder(nn.Module):
         embed_z = self.emb(z_tm1)
         # embed_z = self.inp_dropout(embed_z)
 
+        # The beginning of the forward method up to this point seems to be preprocessing that we should maybe keep.
+        # After this point is a CopyNet implementation = (GRU + generation/copy
+        # score). This will be replaced by our "Transformer with Copy
+        # Mechanism" implementation.
+
         if cfg.use_positional_embedding:  # defaulty not used
             position_label = [position] * u_enc_out.size(1)  # [B]
             position_label = cuda_(Variable(torch.LongTensor(position_label))).view(1, -1)  # [1,B]
@@ -234,7 +319,12 @@ class BSpanDecoder(nn.Module):
             proba = torch.cat([proba, u_copy_score[:, cfg.vocab_size:]], 1)
         else:
             # IHMO also compute copy probability from the encoder output from the previous time step
-            # and concat it 
+            # and concat it.
+            #
+            # This sounds interensting. Seems like an additional trick. Is this
+            # described in the paper? Maybe we could additionally do a similar
+            # trick for "Transformer with Copy Mechanism" and see if it
+            # improves results.
             sparse_pv_z_input = Variable(get_sparse_input_aug(prev_z_input_np), requires_grad=False)
             pv_z_copy_score = self.proj_copy2(pv_z_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
             pv_z_copy_score = torch.matmul(pv_z_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
@@ -256,6 +346,9 @@ class BSpanDecoder(nn.Module):
 
 class ResponseDecoder(nn.Module):
     def __init__(self, embed_size, hidden_size, vocab_size, degree_size, dropout_rate, gru, proj, emb, vocab):
+        # Extra degree_size, gru, proj, emb
+        # degree_size not used, TODO: remove from codebase.
+        # Doesn't do position_encoding_init. Instead, receives embeddings on input.
         super().__init__()
         self.emb = emb
         self.attn_z = Attn(hidden_size)
@@ -270,6 +363,7 @@ class ResponseDecoder(nn.Module):
         self.vocab = vocab
 
     def get_sparse_selective_input(self, x_input_np):
+        # BSpanDecoder uses get_sparse_input_aug. TODO: What is the difference between these two?
         result = np.zeros((x_input_np.shape[0], x_input_np.shape[1], cfg.vocab_size + x_input_np.shape[0]),
                           dtype=np.float32)
         result.fill(1e-10)
@@ -291,22 +385,36 @@ class ResponseDecoder(nn.Module):
         return result
 
     def forward(self, z_enc_out, u_enc_out, u_input_np, m_t_input, degree_input, last_hidden, z_input_np):
+        """
+        This is an implementation of the decoder part of CopyNet. We want to
+        replace this with a Transformer Decoder with a Copy Mechanism.
+
+        Does:
+            1) Transformation of input into sparse - TODO: Look into this, might be important
+            2) Attention, GRU, generation/copy score = CopyNet - No need to understand closely, should be replaced.
+        """
         sparse_z_input = Variable(self.get_sparse_selective_input(z_input_np), requires_grad=False)
 
         m_embed = self.emb(m_t_input)
-        
-        # z_enc_out are stacked (along the time-step axis) outputs of the BSpan decoder
+
+        # z_enc_out are stacked (along the time-step axis) belief spans (computed in BSpanDecoder)
+        # TODO: Why should this be a BSpanDecoder output, when the variable states:
+        #   - z_ = belief span
+        #   - enc_out = encoder output
+        #   - Would a better name be z_dec_out, or is this incorrect understanding of the code?
         z_context = self.attn_z(last_hidden, z_enc_out, mask=True, stop_tok=[self.vocab.encode('EOS_Z2')],
                                 inp_seqs=z_input_np)
-        # u_enc_out are output from the encoder
+
+        # u_enc_out are "user encoder output" = user inputs encoded by the Encoder (SimpleDynamicEncoder)
         u_context = self.attn_u(last_hidden, u_enc_out, mask=True, stop_tok=[self.vocab.encode('EOS_M')],
                                 inp_seqs=u_input_np)
-                                
+
         # TODO what is degree_input? it is coming from the data
         gru_in = torch.cat([m_embed, u_context, z_context, degree_input.unsqueeze(0)], dim=2)
         gru_out, last_hidden = self.gru(gru_in, last_hidden)
-        
-        # following lines are similar to the previous classes
+
+        # The following lines are similar to the previous classes.
+        # They compute the generation score and the copy score = implementation details of CopyNet.
         gen_score = self.proj(torch.cat([z_context, u_context, gru_out], 2)).squeeze(0)
         z_copy_score = self.proj_copy2(z_enc_out.transpose(0, 1)).tanh()
         z_copy_score = torch.matmul(z_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
@@ -326,6 +434,9 @@ class ResponseDecoder(nn.Module):
 
 
 class TSD(nn.Module):
+    """
+
+    """
     def __init__(self, embed_size, hidden_size, vocab_size, degree_size, layer_num, dropout_rate, z_length,
                  max_ts, beam_search=False, teacher_force=100, **kwargs):
         super().__init__()
@@ -410,6 +521,9 @@ class TSD(nn.Module):
         z_tm1 = cuda_(Variable(torch.ones(1, batch_size).long() * 3))  # GO_2 token
         m_tm1 = cuda_(Variable(torch.ones(1, batch_size).long()))  # GO token
         if mode == 'train':
+            """
+            Training code. Contains some code repetition with bspan_decoder and greedy_decode.
+            """
             pz_dec_outs = []
             pz_proba = []
             z_length = z_input.size(0) if z_input is not None else self.z_length  # GO token
@@ -477,6 +591,9 @@ class TSD(nn.Module):
                                             degree_input, bspan_index)
 
     def bspan_decoder(self, u_enc_out, z_tm1, last_hidden, u_input_np, pv_z_enc_out, prev_z_input_np, u_emb, pv_z_emb):
+        """
+        For training, bspan_decoder is not used, instead, z_decoder is called directly.
+        """
         pz_dec_outs = []
         pz_proba = []
         decoded = []
@@ -510,6 +627,9 @@ class TSD(nn.Module):
         return pz_dec_outs, decoded, last_hidden
 
     def greedy_decode(self, pz_dec_outs, u_enc_out, m_tm1, u_input_np, last_hidden, degree_input, bspan_index):
+        """
+        For training, greedy_decode is not used, instead, m_decoder is called directly.
+        """
         decoded = []
         bspan_index_np = pad_sequences(bspan_index).transpose((1, 0))
         for t in range(self.max_ts):
