@@ -101,17 +101,32 @@ class Attn(nn.Module):
         return energy
 
 
-class SimpleDynamicEncoder(nn.Module):
-    def __init__(self, input_size, embed_size, hidden_size, n_layers, dropout):
+class PositionalEncoder(nn.Module):
+    def __init__(self, d_model, dropout, max_len=1000):
         super().__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.embed_size = embed_size
-        self.n_layers = n_layers
-        self.dropout = dropout
+        self.pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.dropout = nn.Dropout(p=dropout)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return self.dropout(x)
+
+class SimpleDynamicEncoder(nn.Module):
+    def __init__(self, input_size, embed_size, hidden_size, n_layers, dropout, d_model, nhead, dim_ff):
+        # NEW (ondra)
+        super().__init__()
+        self.model_type='TransformerEncoder'
+        self.positional_encoder = PositionalEncoder(d_model, dropout, self.cfg.max_ts)
+        encoder_layers = nn.modules.TransformerEncoderLayer(d_model, nhead, dim_ff)
+        self.transformer_encoder = nn.modules.TransformerEncoder(encoder_layers, n_layers)
         self.embedding = nn.Embedding(input_size, embed_size)
-        self.gru = nn.GRU(embed_size, hidden_size, n_layers, dropout=self.dropout, bidirectional=True)
-        init_gru(self.gru)
+
 
     def forward(self, input_seqs, input_lens, hidden=None):
         """
@@ -121,44 +136,85 @@ class SimpleDynamicEncoder(nn.Module):
         :param input_lens: *numpy array* of len for each input sequence
         :return:
         """
-        batch_size = input_seqs.size(1)
-        embedded = self.embedding(input_seqs)
-        embedded = embedded.transpose(0, 1)  # [B,T,E]
-        sort_idx = np.argsort(-input_lens)
-        unsort_idx = cuda_(torch.LongTensor(np.argsort(sort_idx)))
-        input_lens = input_lens[sort_idx]
-        sort_idx = cuda_(torch.LongTensor(sort_idx))
-        embedded = embedded[sort_idx].transpose(0, 1)  # [T,B,E]
-        packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, input_lens)
-        outputs, hidden = self.gru(packed, hidden)
+        # batch_size = input_seqs.size(1)
+        # embedded = self.embedding(input_seqs)
+        # embedded = embedded.transpose(0, 1)  # [B,T,E]
+        # sort_idx = np.argsort(-input_lens)
+        # unsort_idx = cuda_(torch.LongTensor(np.argsort(sort_idx)))
+        # input_lens = input_lens[sort_idx]
+        # sort_idx = cuda_(torch.LongTensor(sort_idx))
+        # embedded = embedded[sort_idx].transpose(0, 1)  # [T,B,E]
+        # packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, input_lens)
+        # outputs, hidden = self.gru(packed, hidden)
 
-        outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(outputs)
-        outputs = outputs[:, :, :self.hidden_size] + outputs[:, :, self.hidden_size:]
-        outputs = outputs.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
-        hidden = hidden.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
-        return outputs, hidden, embedded
+        # outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(outputs)
+        # outputs = outputs[:, :, :self.hidden_size] + outputs[:, :, self.hidden_size:]
+        # outputs = outputs.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
+        # hidden = hidden.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
+        # return outputs, hidden, embedded
+
+        # NEW (ondra)
+        embedded = self.embedding(input_seqs)
+
+        # (ondra): probably dont need this - it is done because of RNN performance issues on GPU (?)
+        # embedded = embedded.transpose(0, 1)  # [B,T,E]
+        # sort_idx = np.argsort(-input_lens)
+        # unsort_idx = cuda_(torch.LongTensor(np.argsort(sort_idx)))
+        # input_lens = input_lens[sort_idx]
+        # sort_idx = cuda_(torch.LongTensor(sort_idx))
+        # embedded = embedded[sort_idx].transpose(0, 1)  # [T,B,E]
+
+        embedded = self.positional_encoder(embedded)  # add positional encoding
+        # (ondra): do not need to return 'hidden' representation
+        outputs = self.transformer_encoder(embedded)
+        return outputs, embedded
+
 
 
 class BSpanDecoder(nn.Module):
-    def __init__(self, embed_size, hidden_size, vocab_size, dropout_rate, vocab):
-        super().__init__()
-        self.emb = nn.Embedding(vocab_size, embed_size)
-        if cfg.use_positional_embedding:
-            self.positional_embedding = nn.Embedding(cfg.max_ts + 1, embed_size)
-            init_pos_emb = self.position_encoding_init(cfg.max_ts + 1, embed_size)
-            self.positional_embedding.weight.data = init_pos_emb
-        self.gru = nn.GRU(hidden_size + embed_size, hidden_size, dropout=dropout_rate)
-        self.proj = nn.Linear(hidden_size * 2, vocab_size)
+    def __init__(self, embed_size, hidden_size, vocab_size, dropout_rate, vocab, d_model, nhead, dim_ff):
+        # super().__init__()
+        # self.emb = nn.Embedding(vocab_size, embed_size)
+        # if cfg.use_positional_embedding:
+            # self.positional_embedding = nn.Embedding(cfg.max_ts + 1, embed_size)
+            # init_pos_emb = self.position_encoding_init(cfg.max_ts + 1, embed_size)
+            # self.positional_embedding.weight.data = init_pos_emb
+        # self.gru = nn.GRU(hidden_size + embed_size, hidden_size, dropout=dropout_rate)
+        # self.proj = nn.Linear(hidden_size * 2, vocab_size)
 
-        self.attn_u = Attn(hidden_size)
+        # self.attn_u = Attn(hidden_size)
+        # self.proj_copy1 = nn.Linear(hidden_size, hidden_size)
+        # self.proj_copy2 = nn.Linear(hidden_size, hidden_size)
+        # self.dropout_rate = dropout_rate
+
+        # self.inp_dropout = nn.Dropout(self.dropout_rate)
+
+        # init_gru(self.gru)
+        # self.vocab = vocab
+
+        # NEW (ondra)
+        super().__init__()
+        # self.emb = nn.Embedding(vocab_size, embed_size)
+        # if cfg.use_positional_embedding:
+            # self.positional_embedding = nn.Embedding(cfg.max_ts + 1, embed_size)
+            # init_pos_emb = self.position_encoding_init(cfg.max_ts + 1, embed_size)
+            # self.positional_embedding.weight.data = init_pos_emb
+
+        self.model_type='TransformerDecoder'
+        self.positional_encoder = PositionalEncoder(d_model, dropout, self.cfg.max_ts)
+        decoder_layers = nn.modules.TransformerDecoderLayer(d_model, nhead, dim_ff)
+        self.transformer_decoder = nn.modules.TransformerDecoder(decoder_layers, n_layers)
+
+        # self.attn_u = Attn(hidden_size)  # useless IMHO
+        # (ondra): a mask should be here?
         self.proj_copy1 = nn.Linear(hidden_size, hidden_size)
         self.proj_copy2 = nn.Linear(hidden_size, hidden_size)
         self.dropout_rate = dropout_rate
 
         self.inp_dropout = nn.Dropout(self.dropout_rate)
 
-        init_gru(self.gru)
         self.vocab = vocab
+
 
     def position_encoding_init(self, n_position, d_pos_vec):
         position_enc = np.array([[pos / np.power(10000, 2 * (j // 2) / d_pos_vec) for j in range(d_pos_vec)]
@@ -170,7 +226,11 @@ class BSpanDecoder(nn.Module):
 
     def forward(self, u_enc_out, z_tm1, last_hidden, u_input_np, pv_z_enc_out, prev_z_input_np, u_emb, pv_z_emb,
                 position):
+        # NEW (ondra)
+        # Notes (ondra):
+        # `pv_z_enc_out` is "previous_z_encoder_output" 
 
+        # (ondra) what is this??
         sparse_u_input = Variable(get_sparse_input_aug(u_input_np), requires_grad=False)
 
         if pv_z_enc_out is not None:
@@ -178,6 +238,7 @@ class BSpanDecoder(nn.Module):
                                   inp_seqs=np.concatenate([prev_z_input_np, u_input_np], 0),
                                   stop_tok=[self.vocab.encode('EOS_M')])
         else:
+            # (ondra) when does this happen?
             context = self.attn_u(last_hidden, u_enc_out, mask=True, inp_seqs=u_input_np,
                                   stop_tok=[self.vocab.encode('EOS_M')])
         embed_z = self.emb(z_tm1)
@@ -189,14 +250,16 @@ class BSpanDecoder(nn.Module):
             pos_emb = self.positional_embedding(position_label)
             embed_z = embed_z + pos_emb
 
-        gru_in = torch.cat([embed_z, context], 2)
-        gru_out, last_hidden = self.gru(gru_in, last_hidden)
+        input_to_transformer = embed_z #torch.cat([embed_z, context], 2)
+
+        # TODO (ondra): add mask to the decoder
+        dec_out = self.transformer_decoder(input_to_transformer, u_enc_out)
         # gru_out = self.inp_dropout(gru_out)
-        gen_score = self.proj(torch.cat([gru_out, context], 2)).squeeze(0)
+        gen_score = self.proj(dec_out).squeeze(0)
         # gen_score = self.inp_dropout(gen_score)
         u_copy_score = self.proj_copy1(u_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
         # stable version of copynet
-        u_copy_score = torch.matmul(u_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
+        u_copy_score = torch.matmul(u_copy_score, dec_out.squeeze(0).unsqueeze(2)).squeeze(2)
         u_copy_score = u_copy_score.cpu()
         u_copy_score_max = torch.max(u_copy_score, dim=1, keepdim=True)[0]
         u_copy_score = torch.exp(u_copy_score - u_copy_score_max)  # [B,T]
@@ -213,7 +276,7 @@ class BSpanDecoder(nn.Module):
         else:
             sparse_pv_z_input = Variable(get_sparse_input_aug(prev_z_input_np), requires_grad=False)
             pv_z_copy_score = self.proj_copy2(pv_z_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
-            pv_z_copy_score = torch.matmul(pv_z_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
+            pv_z_copy_score = torch.matmul(pv_z_copy_score, dec_out.squeeze(0).unsqueeze(2)).squeeze(2)
             pv_z_copy_score = pv_z_copy_score.cpu()
             pv_z_copy_score_max = torch.max(pv_z_copy_score, dim=1, keepdim=True)[0]
             pv_z_copy_score = torch.exp(pv_z_copy_score - pv_z_copy_score_max)  # [B,T]
@@ -227,7 +290,8 @@ class BSpanDecoder(nn.Module):
                                                        scores[:, 2 * cfg.vocab_size + u_input_np.shape[0]:]
             proba = gen_score + u_copy_score[:, :cfg.vocab_size] + pv_z_copy_score[:, :cfg.vocab_size]  # [B,V]
             proba = torch.cat([proba, pv_z_copy_score[:, cfg.vocab_size:], u_copy_score[:, cfg.vocab_size:]], 1)
-        return gru_out, last_hidden, proba
+        return dec_out, last_hidden, proba
+
 
 
 class ResponseDecoder(nn.Module):
@@ -236,8 +300,12 @@ class ResponseDecoder(nn.Module):
         self.emb = emb
         self.attn_z = Attn(hidden_size)
         self.attn_u = Attn(hidden_size)
-        self.gru = gru
-        init_gru(self.gru)
+        # self.gru = gru
+        # init_gru(self.gru)
+        # NEW
+        decoder_layers = nn.modules.TransformerDecoderLayer(d_model, nhead, dim_ff)
+        self.transformer_decoder = nn.modules.TransformerDecoder(decoder_layers, n_layers)
+
         self.proj = proj
         self.proj_copy1 = nn.Linear(hidden_size, hidden_size)
         self.proj_copy2 = nn.Linear(hidden_size, hidden_size)
@@ -267,6 +335,8 @@ class ResponseDecoder(nn.Module):
         return result
 
     def forward(self, z_enc_out, u_enc_out, u_input_np, m_t_input, degree_input, last_hidden, z_input_np):
+
+        # (ondra) what is this?
         sparse_z_input = Variable(self.get_sparse_selective_input(z_input_np), requires_grad=False)
 
         m_embed = self.emb(m_t_input)
@@ -296,17 +366,21 @@ class ResponseDecoder(nn.Module):
 
 class TSD(nn.Module):
     def __init__(self, embed_size, hidden_size, vocab_size, degree_size, layer_num, dropout_rate, z_length,
-                 max_ts, beam_search=False, teacher_force=100, **kwargs):
+                 max_ts, d_model, nhead, dim_ff, beam_search=False, teacher_force=100, **kwargs):
         super().__init__()
         self.vocab = kwargs['vocab']
         self.reader = kwargs['reader']
         self.emb = nn.Embedding(vocab_size, embed_size)
-        self.dec_gru = nn.GRU(degree_size + embed_size + hidden_size * 2, hidden_size, dropout=dropout_rate)
+        # Not needed now
+        # self.dec_gru = nn.GRU(degree_size + embed_size + hidden_size * 2, hidden_size, dropout=dropout_rate)
         self.proj = nn.Linear(hidden_size * 3, vocab_size)
-        self.u_encoder = SimpleDynamicEncoder(vocab_size, embed_size, hidden_size, layer_num, dropout_rate)
+        self.u_encoder = SimpleDynamicEncoder(vocab_size, embed_size, hidden_size, layer_num, dropout_rate, d_model, nhead, dim_ff)
         self.z_decoder = BSpanDecoder(embed_size, hidden_size, vocab_size, dropout_rate, self.vocab)
+        # ResponseDecoder has one parameter less
+        # self.m_decoder = ResponseDecoder(embed_size, hidden_size, vocab_size, degree_size, dropout_rate,
+                                         # self.dec_gru, self.proj, self.emb, self.vocab)
         self.m_decoder = ResponseDecoder(embed_size, hidden_size, vocab_size, degree_size, dropout_rate,
-                                         self.dec_gru, self.proj, self.emb, self.vocab)
+                                                         self.proj, self.emb, self.vocab)
         self.embed_size = embed_size
 
         self.z_length = z_length
