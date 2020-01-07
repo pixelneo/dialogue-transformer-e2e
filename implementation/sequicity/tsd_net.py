@@ -170,16 +170,6 @@ class SimpleDynamicEncoder(nn.Module):
     """
     This class should be replaced by a TransformerEncoder using
     nn.modules.TransformerEncoderLayer. Also, implement dropout.
-
-    In the transformer branch, @pixelneo wrote PositionalEncoder.
-    I beleive that he is contatenating each input token with its position.
-    However, I do not understant the formulas - why exp, 10000.0, sin, cos...?
-    @pixelneo, could you please add some documentation?
-
-    Also, where is the positional information being added in
-    SimpleDynamicEncoder? I don't see the same formulas here.
-    Did you move code from BSpanDecoder.position_encoding_init into the
-    Encoder? If yes, why the change?
     """
 
     def __init__(self, input_size, embed_size, hidden_size, n_layers, dropout):
@@ -201,24 +191,40 @@ class SimpleDynamicEncoder(nn.Module):
         :param input_lens: *numpy array* of len for each input sequence
         :return:
         """
+        # From https://pytorch.org/docs/stable/nn.html#torch.nn.utils.rnn.pack_padded_sequence:
+        # B = batch size
+        # T = length of the longest sequence
+        # E = ??? (Probably just the final dimension)
         batch_size = input_seqs.size(1)
+
+        # Embeddings
         embedded = self.embedding(input_seqs)
         embedded = embedded.transpose(0, 1)  # [B,T,E]
+
+        # This code block handles padding, sorting and packing of input
+        # sequences using input_lens. This code will need to be different in
+        # our Transformer implementation, as transformers use various masks
+        # instead.
         sort_idx = np.argsort(-input_lens)
         unsort_idx = cuda_(torch.LongTensor(np.argsort(sort_idx)))
         input_lens = input_lens[sort_idx]
         sort_idx = cuda_(torch.LongTensor(sort_idx))
         embedded = embedded[sort_idx].transpose(0, 1)  # [T,B,E]
         packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, input_lens)
+
+        # GRU RNN
         outputs, hidden = self.gru(packed, hidden)
 
+        # The padding, sorting and packing in the code block above is
+        # preprocessing to pass the data to the GRU. Now, GRU outputs must be
+        # postprocessed to obtain unpacked, unpadded data in original order.
         outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(outputs)
         outputs = outputs[:, :, :self.hidden_size] + outputs[:, :, self.hidden_size:]
         outputs = outputs.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
         hidden = hidden.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
-        
+
         # outputs are the 'hidden' states of the last gru layer
-        # hidden are the hidden states of the last time-step in each layer 
+        # hidden are the hidden states of the last time-step in each layer
         # embedded are just the embedding for inputs
         return outputs, hidden, embedded
 
