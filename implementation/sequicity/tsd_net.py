@@ -260,9 +260,11 @@ class BSpanDecoder(nn.Module):
 
     def forward(self, u_enc_out, z_tm1, last_hidden, u_input_np, pv_z_enc_out, prev_z_input_np, u_emb, pv_z_emb,
                 position):
+        # TODO: Document what exactly are the inputs and outputs of this forward function?
 
         sparse_u_input = Variable(get_sparse_input_aug(u_input_np), requires_grad=False)
 
+        # Attention mechanism. Not needed in out Transformer version.
         if pv_z_enc_out is not None:
             # IHMO we are at least 2nd time step. so this is just longer context (where does this apper in the paper?)
             context = self.attn_u(last_hidden, torch.cat([pv_z_enc_out, u_enc_out], dim=0), mask=True,
@@ -272,15 +274,15 @@ class BSpanDecoder(nn.Module):
             # no previous encoder output => 1st time step
             context = self.attn_u(last_hidden, u_enc_out, mask=True, inp_seqs=u_input_np,
                                   stop_tok=[self.vocab.encode('EOS_M')])
-        
+
         # embedding of GO token
+        # TODO: Look into the special tokens
         # see main training loop (forward_turn func):
         # cuda_(Variable(torch.ones(1, batch_size).long() * 3))  # GO_2 token
         embed_z = self.emb(z_tm1)
         # embed_z = self.inp_dropout(embed_z)
 
-        # The beginning of the forward method up to this point seems to be preprocessing that we should maybe keep.
-        # After this point is a CopyNet implementation = (GRU + generation/copy
+        # Here starts a CopyNet implementation = (GRU + generation/copy
         # score). This will be replaced by our "Transformer with Copy
         # Mechanism" implementation.
 
@@ -294,13 +296,13 @@ class BSpanDecoder(nn.Module):
         gru_in = torch.cat([embed_z, context], 2)
         gru_out, last_hidden = self.gru(gru_in, last_hidden)
         # gru_out = self.inp_dropout(gru_out)
-         
+
         # simple 'generate' (as oppose to copy) score (see eq. 3)
         gen_score = self.proj(torch.cat([gru_out, context], 2)).squeeze(0)
         # gen_score = self.inp_dropout(gen_score)
         u_copy_score = self.proj_copy1(u_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
         # stable version of copynet
-        
+
         # TODO this i know is copy score, however what the three (un)squeezes do, i do not know 
         # (ie  what shape it had and why it has to change it twice)
         u_copy_score = torch.matmul(u_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
@@ -312,7 +314,7 @@ class BSpanDecoder(nn.Module):
         u_copy_score = cuda_(u_copy_score)
         if pv_z_enc_out is None:
             # u_copy_score = self.inp_dropout(u_copy_score)
-            
+
             # concat generate and copy scores (for each slot) and do softmax
             scores = F.softmax(torch.cat([gen_score, u_copy_score], dim=1), dim=1)
             # first part is for generation and the second for copy score 
@@ -399,6 +401,7 @@ class ResponseDecoder(nn.Module):
             1) Transformation of input into sparse - TODO: Look into this, might be important
             2) Attention, GRU, generation/copy score = CopyNet - No need to understand closely, should be replaced.
         """
+        # TODO: Document what exactly are the inputs and outputs of this forward function?
         sparse_z_input = Variable(self.get_sparse_selective_input(z_input_np), requires_grad=False)
 
         m_embed = self.emb(m_t_input)
