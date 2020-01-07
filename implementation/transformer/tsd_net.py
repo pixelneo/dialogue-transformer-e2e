@@ -138,7 +138,6 @@ class SimpleTransformerEncoder(nn.Module):
         self.model_type='TransformerEncoder'
 
         self.embedding = nn.Embedding(vocabulary_size, embedding_dimension)
-        # TODO: Do we need masking of padding?
         self.positional_encoder = PositionalEncoder(
             d_model=D_MODEL,
             dropout,
@@ -163,7 +162,18 @@ class SimpleTransformerEncoder(nn.Module):
         """
         embedded = self.embedding(input_seqs)
         embedded = self.positional_encoder(embedded)
+
+        # TODO: We need to use `input_lens`, create some masks and pass them to
+        # `transformer_encoder`:
+        #   - mask: the mask for the src sequence (optional).
+        #   - src_key_padding_mask: the mask for the src keys per batch (optional).
+        #
+        # src_key_padding_mask: For the example, this looks like [False, False,
+        # False, False, False, False, False, True, True, True] where the True
+        # positions should be masked. That is input_len * [False] +
+        # (max_input_len - input_len) * [True]?
         outputs = self.transformer_encoder(embedded)
+
         return outputs, embedded
 
 

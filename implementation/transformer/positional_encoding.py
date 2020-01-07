@@ -23,3 +23,28 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         x = x + self.pe[:x.size(0), :]
         return self.dropout(x)
+
+
+# ------------------------------------------------------------------------------
+# TODO: Do we need subsequent masking?
+#
+# Explanation of subsequent masking:
+# https://nlp.seas.harvard.edu/2018/04/03/attention.html
+#
+# Below the attention mask shows the position each tgt word (row) is allowed to
+# look at (column). Words are blocked for attending to future words during
+# training.
+
+# subsequent_mask implementation 1: https://github.com/pytorch/pytorch/blob/master/torch/nn/modules/transformer.py
+def generate_square_subsequent_mask(size):
+    mask = (torch.triu(torch.ones(size, size)) == 1).transpose(0, 1)
+    mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+    return mask
+
+
+# subsequent_mask implementation 2: https://nlp.seas.harvard.edu/2018/04/03/attention.html
+def subsequent_mask(size):
+    "Mask out subsequent positions."
+    attn_shape = (1, size, size)
+    subsequent_mask = np.triu(np.ones(attn_shape), k=1).astype('uint8')
+    return torch.from_numpy(subsequent_mask) == 0
