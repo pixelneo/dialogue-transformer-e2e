@@ -111,6 +111,9 @@ class Model:
             data_iterator = self.reader.mini_batch_iterator('train')
             optim = self.optim
             for iter_num, dial_batch in enumerate(data_iterator):
+                if iter_num < 3:
+                    print('------------------------- dial_batch')
+                    print(dial_batch)
                 turn_states = {}
                 prev_z = None
                 for turn_num, turn_batch in enumerate(dial_batch):
@@ -120,6 +123,24 @@ class Model:
                     u_input, u_input_np, z_input, m_input, m_input_np, u_len, \
                     m_len, degree_input, kw_ret \
                         = self._convert_batch(turn_batch, prev_z)
+
+                    if iter_num < 3:
+                        print('degree_input')
+                        print(degree_input)
+                        print('u_input')
+                        print(u_input)
+                        print('z_input')
+                        print(z_input)
+                        print('m_input')
+                        print(m_input)
+                        print('m_input_np')
+                        print(m_input_np)
+                        print('u_input_np')
+                        print(u_input_np)
+                        print('kw_ret')
+                        print(kw_ret)
+                        print('------ next turn')
+
 
                     loss, pr_loss, m_loss, turn_states = self.m(u_input=u_input, z_input=z_input,
                                                                 m_input=m_input,
