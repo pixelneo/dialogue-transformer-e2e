@@ -20,6 +20,8 @@ Naming
     u_ is user input
     z_ is bspan
     m_ is machine response
+    
+    *_np is numpy version of * (eg. u_input_np is u_input in numpy.ndarray) 
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
