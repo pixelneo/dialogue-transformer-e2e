@@ -92,11 +92,60 @@ def nan(v):
 
 def get_sparse_input_aug(x_input_np):
     """
-    sparse input of
-    :param x_input_np: [T,B]
-    :return: Numpy array: [B,T,aug_V]
+    :param x_input_np: Numpy (int?) array: [T,B]
+    :return: Pytorch float tensor: [B,T,aug_V]
+
+    Where:
+        - T = maximum length of sequence
+        - B = batch size
+        - aug_V = (vocab_size + T) = augmented vocabulary = vocabulary + input sentence words
+
+    Additional needed inputs:
+      - `vocab_size` is currently read from cfg.vocab_size.
+      - TODO: I personally don't like global variables, I believe it would be
+        nicer to have `vocab_size` at the input of this function.
+
+    Input x_input_np:
+        - Integer-encoded sentences
+        - t=0 (the first time index) is ignored.
+            - TODO: Where is this mentioned in CopyNet?
+            - This seems to be "right-shifting", as known from Transformer
+              architecture: If it weren't here, the model would just learn to
+              always copy the input to the output.
+        - Example: [[0,0,0], [3,2,1],[1,0,0]] contains three sentences:
+            - 1st sentence is of length 2: (word3 word1)
+            - 2nd sentence is of length 1: (word2)
+            - 3rd sentence is of length 1: (word1)
+        - TODO: I'd personally prefer examples, where all dimensions/variables
+          have different values. eg. vocab_size=5, T=4, B=3. This is 3x3, so T
+          = B, not a nice example
+
+    Result result:
+        - One-hot-encoded sentences
+        - Converted input example:
+            - [
+                [[0,0,0,0,1,0,0], [0,0,1,0,0,0,0]],
+                [[0,0,0,1,0,0,0], [0,0,0,0,0,0,0]],
+                [[0,0,1,0,0,0,0], [0,0,0,0,0,0,0]],
+            ]
+            - where those zeros are actually 10^-9 (TODO: Why is this?)
+            - TODO: What is vocab_size in this example?
+            - TOOD: I assume word0 is not possible to have. Why is (word1) not [1,0,0,0,0,0,0], but [0,0,1,0,0,0,0]?
+            - TODO: What is T in this example? Isn't the shape of this array [B,T-1,aug_V]?
+            - TODO: Couldn't aug_V thus be (vocab_size + (T-1))?
+        - One-hot-encoding of OOV words from the current input sentence. These
+          words can be copied over to the output with a Copy Mechanism: If
+          there is a unknown symbol x at time t, it adds a 1 at position
+          vocab_size+t in the last (aug_V) dimension.
+
+    We believe that it would be possible to this function with
+    `get_sparse_selective_input()` into a single function.
+
+    BTW: I'd prefer to use Integer-encoding and One-hot-encoding. (TODO: Do you guys agree?)
     """
     ignore_index = [0]
+    # TODO: What is `unk`? Does (word2) not exist and means OOV word?
+    # TODO: This should be a global constant. Not a magic number floating around the code-base
     unk = 2
     result = np.zeros((x_input_np.shape[0], x_input_np.shape[1], cfg.vocab_size + x_input_np.shape[0]),
                       dtype=np.float32)
@@ -373,10 +422,22 @@ class ResponseDecoder(nn.Module):
         self.vocab = vocab
 
     def get_sparse_selective_input(self, x_input_np):
-        # BSpanDecoder uses get_sparse_input_aug. TODO: What is the difference between these two?
+        """
+        Very similar to get_sparse_input_aug. Have a look at its docstring first.
+
+        However, if the word in question is one of reqs = ['address', 'phone',
+        'postcode', 'pricerange', 'area'], it appends _SLOT at the end of it
+        (eg. phone -> phone_SLOT), and then it gets the corresponding
+        one-hot-encoding representation.
+
+        Also, SLOTS and OOV words recieve a 5.0 instead of a 1.0 in their
+        output "one-hot-encoding". Probably because they should have a much
+        higher chance to be copied. TODO: Verify, is this in the paper?
+        """
         result = np.zeros((x_input_np.shape[0], x_input_np.shape[1], cfg.vocab_size + x_input_np.shape[0]),
                           dtype=np.float32)
         result.fill(1e-10)
+        # TODO: This should be a constant.
         reqs = ['address', 'phone', 'postcode', 'pricerange', 'area']
         for t in range(x_input_np.shape[0] - 1):
             for b in range(x_input_np.shape[1]):
@@ -386,6 +447,12 @@ class ResponseDecoder(nn.Module):
                     slot = self.vocab.encode(word + '_SLOT')
                     result[t + 1][b][slot] = 1.0
                 else:
+                    # "if word is unknown OR its one-hot index is larger than vocab_size"
+                    #
+                    # TODO: I don't understand why they have the OR here. Why
+                    # do we check for two different representation of OOV
+                    # words? Shouldn't all unknown words be replaced by an
+                    # index > vocab_size at the same time?
                     if w == 2 or w >= cfg.vocab_size:
                         result[t + 1][b][cfg.vocab_size + t] = 5.0
                     else:
