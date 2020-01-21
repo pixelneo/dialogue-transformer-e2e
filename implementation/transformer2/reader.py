@@ -119,12 +119,16 @@ class _ReaderBase:
             return [self.sentence_decode(_, eos) + '\n' for _ in l]
 
         def encode(self, item):
+            """ Return index of `item` if it is in dictionary.
+            Index of `<unk>` is returned if `item` is not found."""
             if item in self._item2idx:
                 return self._item2idx[item]
             else:
                 return self._item2idx['<unk>']
 
         def decode(self, idx):
+            """ Return word for `idx` if it exists,
+            ITEM_x where x=idx-vocab_size is returned if idx>vocab_size. """
             if not isinstance(idx, int):
                 idx = idx.item()
 
