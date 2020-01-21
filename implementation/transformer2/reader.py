@@ -216,7 +216,7 @@ class _ReaderBase:
             batches = self._construct_mini_batch(turn_bucket[k])
             all_batches += batches
         self._mark_batch_as_supervised(all_batches)
-        random.shuffle(all_batches)
+        # random.shuffle(all_batches)
         for i, batch in enumerate(all_batches):
             yield self._transpose_batch(batch)
 
