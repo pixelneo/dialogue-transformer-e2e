@@ -25,10 +25,30 @@ def print_dialogues(reader):
                     print('------------')
         print(d.keys())
         return
+def max_len(reader):
+    x = 0
+    sent = ''
+    y = 0
+    for batch in r.mini_batch_iterator('train'):
+        for d in batch: # first is turn0, then turn1
+            for user, u_len, m_len, degree in zip(d['user'], d['u_len'], d['m_len'], d['degree']):
+                if x < u_len:
+                    x = u_len
+                    sent = user
+                if y < m_len:
+                    y = m_len
+    print('u_len')
+    print(x)
+    print(r.vocab.sentence_decode(sent))
+    print(y)
 
 if __name__=='__main__':
+    # cfg.init_handler('tsdf-kvret')
+    # cfg.dataset = 'kvret'
+    # r = reader.KvretReader()
     cfg.init_handler('tsdf-camrest')
     cfg.dataset = 'camrest'
     r = reader.CamRest676Reader()
+    # max_len(r)
     print_dialogues(r)
 
