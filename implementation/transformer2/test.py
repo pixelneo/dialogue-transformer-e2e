@@ -2,12 +2,15 @@
 from config import global_config as cfg
 import reader
 
-def print_dialogues(reader):
+def print_dialogues(r):
     """ Prints dialogues: user_input, bspan and machine response 
     for one batch. """
 
     for batch in r.mini_batch_iterator('train'):
         for d in batch: # first is turn0, then turn1
+
+            print(reader.pad_sequences(d['user'], 128)) 
+            return
             for dial_id, turn_num, user, bspan, response, u_len, m_len, degree in zip(d['dial_id'], d['turn_num'], \
                                                                                       d['user'], d['bspan'], d['response'], \
                                                                                       d['u_len'], d['m_len'], d['degree']):
