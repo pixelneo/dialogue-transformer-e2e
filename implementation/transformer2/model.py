@@ -25,29 +25,20 @@ class Encoder(nn.Module):
         self.pos_encoder = PositionalEncoding(ninp, dropout)
         encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
-        self.encoder = nn.Embedding(ntoken, ninp)  #TODO delete
         self.ninp = ninp
-        self.decoder = nn.Linear(ninp, ntoken)
 
         self.init_weights()
 
     def init_weights(self):
         initrange = 0.1
         self.encoder.weight.data.uniform_(-initrange, initrange)
-        self.decoder.bias.data.zero_()
-        self.decoder.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, src):
         # TODO 1. get glove embedding of input from `reader`
-        if self.src_mask is None or self.src_mask.size(0) != len(src):
-            device = src.device
-            mask = self._generate_square_subsequent_mask(len(src)).to(device)
-            self.src_mask = mask
 
-        src = self.encoder(src) * math.sqrt(self.ninp)
         src = self.pos_encoder(src)
-        output = self.transformer_encoder(src, self.src_mask)
-        output = self.decoder(output)
+        mask = src.eq(0)  # 0 corresponds to <pad>
+        output = self.transformer_encoder(src, src_key_padding_mask=mask)
         return output
 
 class PositionalEncoding(nn.Module):
