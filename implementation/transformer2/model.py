@@ -25,7 +25,7 @@ class Encoder(nn.Module):
         self.pos_encoder = PositionalEncoding(ninp, dropout)
         encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
-        self.embedding = torch.nn.Embedding(ntoken, ninp)
+        self.embedding = nn.Embedding(ntoken, ninp)
         self.ninp = ninp
 
         self.init_weights()
@@ -34,10 +34,8 @@ class Encoder(nn.Module):
         initrange = 0.1
         self.encoder.weight.data.uniform_(-initrange, initrange)
 
-
     def forward(self, src):
-        # TODO 1. get glove embedding of input from `reader`
-
+        src = self.embedding(src) * self.ninp
         src = self.pos_encoder(src)
         mask = src.eq(0)  # 0 corresponds to <pad>
         output = self.transformer_encoder(src, src_key_padding_mask=mask)
@@ -45,7 +43,7 @@ class Encoder(nn.Module):
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=128):
-        super(PositionalEncoding, self).__init__()
+        super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
         pe = torch.zeros(max_len, d_model)
