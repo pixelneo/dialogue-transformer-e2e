@@ -58,6 +58,41 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:x.size(0), :]
         return self.dropout(x)
 
+class BSpanDecoder(nn.Module):
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):
+        """
+        Args:
+            ntoken: vocab size
+            ninp: embedding dimension
+            nhead: number of heads
+            nhid: hidden layer size
+            nlayers: number of layers
+            dropout: dropout rate
+        """
+
+        super().__init__()
+        from torch.nn import TransformerDecoder, TransformerDecoderLayer
+        self.model_type = 'TransformerDecoder'
+        self.src_mask = None
+        self.pos_encoder = PositionalEncoding(ninp, dropout)
+        encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
+        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+        self.embedding = nn.Embedding(ntoken, ninp)
+        self.ninp = ninp
+
+        self.init_weights()
+
+    def init_weights(self):
+        initrange = 0.1
+        self.encoder.weight.data.uniform_(-initrange, initrange)
+
+    def forward(self, src):
+        src = self.embedding(src) * self.ninp
+        src = self.pos_encoder(src)
+        mask = src.eq(0)  # 0 corresponds to <pad>
+        output = self.transformer_encoder(src, src_key_padding_mask=mask)
+        return output
+
 
 def init_embedding(model, r):
     """ Set glove embeddings for model, r is a reader instance """
