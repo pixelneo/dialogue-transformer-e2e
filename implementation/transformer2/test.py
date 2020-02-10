@@ -11,7 +11,6 @@ def print_dialogues(r):
 
             print(reader.pad_sequences(d['user'], 128,padding='post')) 
             x = reader.get_glove_matrix
-            return
             for dial_id, turn_num, user, bspan, response, u_len, m_len, degree in zip(d['dial_id'], d['turn_num'], \
                                                                                       d['user'], d['bspan'], d['response'], \
                                                                                       d['u_len'], d['m_len'], d['degree']):
@@ -20,6 +19,7 @@ def print_dialogues(r):
                     x = r.vocab.sentence_decode(user)
                     print(x)
                     x = r.vocab.sentence_decode(bspan)
+                    print('bspan:', end=' ')
                     print(x)
                     x = r.vocab.sentence_decode(response)
                     print(x)

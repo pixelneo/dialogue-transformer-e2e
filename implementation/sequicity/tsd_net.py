@@ -176,6 +176,10 @@ class BSpanDecoder(nn.Module):
                 position):
 
         sparse_u_input = Variable(get_sparse_input_aug(u_input_np), requires_grad=False)
+        print('z_tm1')
+        print(z_tm1)
+        print(self.vocab.sentence_decode(z_tm1[0]))
+        print(z_tm1.shape)
 
         if pv_z_enc_out is not None:
             # IHMO we are at least 2nd time step. so this is just longer context (where does this apper in the paper?)
@@ -278,6 +282,7 @@ class ResponseDecoder(nn.Module):
             for b in range(x_input_np.shape[1]):
                 w = x_input_np[t][b]
                 word = self.vocab.decode(w)
+                # print(word, end='   ')
                 if word in reqs:
                     slot = self.vocab.encode(word + '_SLOT')
                     result[t + 1][b][slot] = 1.0
@@ -288,6 +293,7 @@ class ResponseDecoder(nn.Module):
                         result[t + 1][b][w] = 1.0
         result_np = result.transpose((1, 0, 2))
         result = torch.from_numpy(result_np).float()
+        print('---end words')
         return result
 
     def forward(self, z_enc_out, u_enc_out, u_input_np, m_t_input, degree_input, last_hidden, z_input_np):
@@ -405,6 +411,12 @@ class TSD(nn.Module):
 
         if prev_z_input is not None:
             pv_z_enc_out, _, pv_z_emb = self.u_encoder(prev_z_input, prev_z_len)
+        print('u_input')
+        # print(u_input)
+        for item in u_input:
+            print(self.reader.vocab.sentence_decode(item))
+            print('---')
+        print('--u_input end')
         u_enc_out, u_enc_hidden, u_emb = self.u_encoder(u_input, u_len)
         last_hidden = u_enc_hidden[:-1]
         z_tm1 = cuda_(Variable(torch.ones(1, batch_size).long() * 3))  # GO_2 token
@@ -459,6 +471,12 @@ class TSD(nn.Module):
                                                                        pv_z_enc_out=pv_z_enc_out,
                                                                        prev_z_input_np=prev_z_input_np,
                                                                        u_emb=u_emb, pv_z_emb=pv_z_emb)
+            print('u_enc_out:')
+            # print(u_enc_out)
+            print('pz_dec_outs:')
+            # print(pz_dec_outs)
+            print('----')
+
             pz_dec_outs = torch.cat(pz_dec_outs, dim=0)
             degree_input = self.reader.db_degree_handler(bspan_index, kwargs['dial_id'])
             degree_input = cuda_(Variable(torch.from_numpy(degree_input).float()))
@@ -489,7 +507,7 @@ class TSD(nn.Module):
                                prev_z_input_np=prev_z_input_np, u_emb=u_emb, pv_z_emb=pv_z_emb, position=t)
             pz_proba.append(proba)
             pz_dec_outs.append(pz_dec_out)
-            z_proba, z_index = torch.topk(proba, 1)  # [B,1]
+            z_proba, z_index = torch.topk(proba, 1)  # [B,1]   # most probable item in proba, and its index
             z_index = z_index.data.view(-1)
             decoded.append(z_index.clone())
             for i in range(z_index.size(0)):

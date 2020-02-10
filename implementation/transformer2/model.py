@@ -75,8 +75,8 @@ class BSpanDecoder(nn.Module):
         self.model_type = 'TransformerDecoder'
         self.src_mask = None
         self.pos_encoder = PositionalEncoding(ninp, dropout)
-        encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
-        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
+        decoder_layers = TransformerDecoderLayer(ninp, nhead, nhid, dropout)
+        self.transformer_decoder = TransformerDecoder(encoder_layers, nlayers)
         self.embedding = nn.Embedding(ntoken, ninp)
         self.ninp = ninp
 
