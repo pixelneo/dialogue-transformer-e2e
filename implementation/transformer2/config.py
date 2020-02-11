@@ -46,7 +46,7 @@ class _Config:
         self.rl_epoch_num = 1
         self.cuda = False
         self.spv_proportion = 100
-        self.max_ts = 40
+        self.max_ts = 128
         self.early_stop_count = 3
         self.new_vocab = True
         self.model_path = './models/camrest.pkl'
@@ -86,7 +86,7 @@ class _Config:
         self.cuda = False
         self.spv_proportion = 100
         self.alpha = 0.0
-        self.max_ts = 40
+        self.max_ts = 128
         self.early_stop_count = 3
         self.new_vocab = True
         self.model_path = './models/kvret.pkl'
