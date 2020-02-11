@@ -25,7 +25,7 @@ class _Config:
 
     def _camrest_tsdf_init(self):
         self.beam_len_bonus = 0.5
-        self.prev_z_method = 'separate'
+        self.prev_z_method = 'concat'  # important for transformer (should be 'concat')
         self.vocab_size = 800
         self.embedding_size = 50
         self.hidden_size = 50
@@ -62,7 +62,7 @@ class _Config:
         self.pretrain = False
 
     def _kvret_tsdf_init(self):
-        self.prev_z_method = 'separate'
+        self.prev_z_method = 'concat'
         self.intent = 'all'
         self.vocab_size = 1400
         self.embedding_size = 50

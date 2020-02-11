@@ -7,10 +7,13 @@ def print_dialogues(r):
     for one batch. """
 
     for batch in r.mini_batch_iterator('train'):
+        # print(len(batch))
         for d in batch: # first is turn0, then turn1
-
-            print(reader.pad_sequences(d['user'], 128,padding='post')) 
-            x = reader.get_glove_matrix
+            # x = reader.get_glove_matrix
+            print('s')
+            print(d['turn_num'][0])
+            print(len(d['user']))
+            continue
             for dial_id, turn_num, user, bspan, response, u_len, m_len, degree in zip(d['dial_id'], d['turn_num'], \
                                                                                       d['user'], d['bspan'], d['response'], \
                                                                                       d['u_len'], d['m_len'], d['degree']):
@@ -27,8 +30,45 @@ def print_dialogues(r):
                     print('m_len: {}'.format(m_len))
                     print('degree: {}'.format(degree))
                     print('------------')
+            print('#'*50)
+
         print(d.keys())
-        return
+        print('\n')
+        print('*'*100)
+
+def with_convert(r):
+    for batch in r.mini_batch_iterator('train'):
+        # print(len(batch))
+        prev_z = None
+        for d in batch: # first is turn0, then turn1
+            u_input, u_input_np, z_input, m_input, m_input_np, u_len, \
+            m_len, degree_input, kw_ret \
+                = reader._convert_batch(d, r, prev_z)
+            # print(u_input)
+            # print(d['user'])
+            # return
+            for ui, zi, mi, uio, zio, mio in zip(u_input, z_input, m_input, d['user'], d['bspan'], d['response']):
+                x = r.vocab.sentence_decode(ui)
+                print('u_input: {}'.format(x))
+                x = r.vocab.sentence_decode(uio)
+                print('u_origi: {}'.format(x))
+                x = r.vocab.sentence_decode(zi)
+                print('z_input: {}'.format(x))
+                x = r.vocab.sentence_decode(zio)
+                print('z_origi: {}'.format(x))
+                x = r.vocab.sentence_decode(mi)
+                print('m_input: {}'.format(x))
+                x = r.vocab.sentence_decode(mio)
+                print('m_origi: {}'.format(x))
+
+                print('------------')
+            print('#'*50)
+            prev_z = d['bspan']
+
+        # print(d.keys())
+        print('\n')
+        print('*'*100)
+
 def max_len(reader):
     x = 0
     sent = ''
@@ -54,5 +94,5 @@ if __name__=='__main__':
     cfg.dataset = 'camrest'
     r = reader.CamRest676Reader()
     # max_len(r)
-    print_dialogues(r)
+    with_convert(r)
 

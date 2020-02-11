@@ -42,7 +42,7 @@ class Encoder(nn.Module):
         return output
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, dropout=0.1, max_len=128):
+    def __init__(self, d_model, dropout=0.1, max_len=512):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
@@ -86,11 +86,16 @@ class BSpanDecoder(nn.Module):
         initrange = 0.1
         self.encoder.weight.data.uniform_(-initrange, initrange)
 
-    def forward(self, src):
-        src = self.embedding(src) * self.ninp
-        src = self.pos_encoder(src)
-        mask = src.eq(0)  # 0 corresponds to <pad>
-        output = self.transformer_encoder(src, src_key_padding_mask=mask)
+    def _generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def forward(self, tgt, timestep):
+        tgt = self.embedding(tgt) * self.ninp
+        tgt = self.pos_encoder(tgt)
+        mask = tgt.eq(0)  # 0 corresponds to <pad>
+        output = self.transformer_decoder(tgt, tgt_mask=None, src_key_padding_mask=mask) # TODO create tgt_mask, masking positions > timestep
         return output
 
 
