@@ -175,6 +175,35 @@ class ResponseDecoder(nn.Module):
         output = self.linear(output)
         return output
 
+def SequicityModel(nn.Module):
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):
+        """
+        Args:
+            ntoken: vocab size
+            ninp: embedding dimension
+            nhead: number of heads
+            nhid: hidden layer size
+            nlayers: number of layers
+            dropout: dropout rate
+        """
+        super().__init__()
+        self.model_type = 'Transformer'
+        self.embedding = nn.Embedding(ntoken, ninp) if embedding is None else embedding
+
+        self.encoder = Encoder(ntoken, ninp, nhead, nhid, dropout, embedding)
+        self.bspan_decoder = BSpanDecoder(ntoken, ninp, nhead, nhid, dropout, embedding)
+        self.response_decoder = BSpanDecoder(ntoken, ninp, nhead, nhid, dropout, embedding)
+
+    def forward(self, user_input, bdecoder_input, rdecoder_input):
+        """ Call perform one step in sequicity.
+        Encode input, decoder bspan, decode response 
+
+        Args:
+
+        Returns:
+
+        """
+
 
 def init_embedding_model(model, r):
     """ Set glove embeddings for model, r is a reader instance """
@@ -196,6 +225,8 @@ def get_params():
     p['nhid'] = 64
     p['nlayers'] = 3
     p['dropout'] = 0.2
+    p['warm_lr'] = 0.1
+    p['lr'] = 0.0001
 
     return p
 
@@ -205,12 +236,16 @@ def main_function():
     r = reader.CamRest676Reader()
     params = get_params()
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # use GPU or CPU
+
     embedding = nn.Embedding(params['ntoken'], params['ninp'])
     embedding = init_embedding(embedding, r)
 
-    encoder = Encoder(params['ntoken'], params['ninp'], params['nhead'], params['nhid'], params['dropout'], embedding)
-    bspan_decoder = BSpanDecoder(params['ntoken'], params['ninp'], params['nhead'], params['nhid'], params['dropout'], embedding)
-    response_decoder = BSpanDecoder(params['ntoken'], params['ninp'], params['nhead'], params['nhid'], params['dropout'], embedding)
+    encoder = Encoder(params['ntoken'], params['ninp'], params['nhead'], params['nhid'], params['dropout'], embedding).to(device)
+    bspan_decoder = BSpanDecoder(params['ntoken'], params['ninp'], params['nhead'], params['nhid'], params['dropout'], embedding).to(device)
+    response_decoder = BSpanDecoder(params['ntoken'], params['ninp'], params['nhead'], params['nhid'], params['dropout'], embedding).to(device)
+
+    optimizer = torch.optim.Adam([encoder, lr=params['lr'])
 
     iterator = r.mini_batch_iterator('train') # bucketed by turn_num
     # TODO what about different batch sizes
