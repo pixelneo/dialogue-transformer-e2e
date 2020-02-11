@@ -85,12 +85,15 @@ class BSpanDecoder(nn.Module):
         self.transformer_decoder = TransformerDecoder(encoder_layers, nlayers)
         self.embedding = nn.Embedding(ntoken, ninp) if embedding is None else embedding
         self.ninp = ninp
+        self.linear = nn.Linear(ninp, ntoken)
 
         self.init_weights()
 
     def init_weights(self):
         initrange = 0.1
         self.transformer_decoder.weight.data.uniform_(-initrange, initrange)
+        self.linear.bias.data.zero_()
+        self.linear.weight.data.uniform_(-initrange, initrange)
 
     def _generate_square_subsequent_mask(self, sz):
         """ This makes the model autoregressive.
@@ -99,12 +102,23 @@ class BSpanDecoder(nn.Module):
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
-    def forward(self, tgt):
+    def forward(self, tgt, memory):
+        """ Call decoder
+
+        Args:
+            tgt: input to transformer_decoder
+            memory: output from the encoder
+
+        Returns:
+            output from linear layer, (vocab size), pre softmax
+
+        """
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
         mask = tgt.eq(0)  # 0 corresponds to <pad>
         tgt_mask = self._generate_square_subsequent_mask(tgt.shape[0])
-        output = self.transformer_decoder(tgt, tgt_mask=tgt_mask, src_key_padding_mask=mask)
+        output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, src_key_padding_mask=mask)
+        output = self.linear(output)
         return output
 
 class ResponseDecoder(nn.Module):
@@ -127,24 +141,38 @@ class ResponseDecoder(nn.Module):
         self.transformer_decoder = TransformerDecoder(encoder_layers, nlayers)
         self.embedding = nn.Embedding(ntoken, ninp) if embedding is None else embedding
         self.ninp = ninp
+        self.linear = nn.Linear(ninp, ntoken)
 
         self.init_weights()
 
     def init_weights(self):
         initrange = 0.1
         self.transformer_decoder.weight.data.uniform_(-initrange, initrange)
+        self.linear.bias.data.zero_()
+        self.linear.weight.data.uniform_(-initrange, initrange)
 
     def _generate_square_subsequent_mask(self, sz):
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
-    def forward(self, tgt):
+    def forward(self, tgt, memory):
+        """ Call decoder
+
+        Args:
+            tgt: input to transformer_decoder
+            memory: output from the encoder
+
+        Returns:
+            output from linear layer, (vocab size), pre softmax
+
+        """
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
         mask = tgt.eq(0)  # 0 corresponds to <pad>
         tgt_mask = self._generate_square_subsequent_mask(tgt.shape[0])
-        output = self.transformer_decoder(tgt, tgt_mask=tgt_mask, src_key_padding_mask=mask) # TODO create tgt_mask, masking positions > timestep
+        output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, src_key_padding_mask=mask)
+        output = self.linear(output)
         return output
 
 
@@ -183,6 +211,19 @@ def main_function():
     encoder = Encoder(params['ntoken'], params['ninp'], params['nhead'], params['nhid'], params['dropout'], embedding)
     bspan_decoder = BSpanDecoder(params['ntoken'], params['ninp'], params['nhead'], params['nhid'], params['dropout'], embedding)
     response_decoder = BSpanDecoder(params['ntoken'], params['ninp'], params['nhead'], params['nhid'], params['dropout'], embedding)
+
+    iterator = r.mini_batch_iterator('train') # bucketed by turn_num
+    # TODO what about different batch sizes
+    for batch in iterator:
+        prev_bspan = None  # bspan from previous turn
+        for turn in batch:
+            encoder_input, encoder_input_np, bdec_input, rdec_input, rdec_input_np, encoder_len, \
+            response_len, degree_input, kw_ret = reader._convert_batch(d, r, prev_bspan)
+
+            # TODO implement training
+
+            prev_bspan = turn['bspan']
+
 
 
 if __name__=='__main__':
