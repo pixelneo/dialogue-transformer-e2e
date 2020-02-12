@@ -1,4 +1,7 @@
 #!/usr/bin/env python3 
+
+# This file is only used for understanding reader.py
+
 from config import global_config as cfg
 import reader
 

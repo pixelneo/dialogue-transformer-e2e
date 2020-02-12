@@ -11,6 +11,7 @@ from config import global_config as cfg
 
 # TODO:
 # 1. (maybe) do encoding for user and machine separately (additional positional encoding)
+# 2. does torch transformer do teacher forcing? should it?
 
 
 class PositionalEncoding(nn.Module):
@@ -203,6 +204,12 @@ def SequicityModel(nn.Module):
         Returns:
 
         """
+        # TODO during training, should we pass output of BSpanDecoder to ResponseDecoder,
+        # or use 'teacher forcing' and pass the bspan from training data?
+        encoded = self.encoder(user_input)
+        bspan = self.bspan_decoder(bdecoder_input, encoded)
+        # TODO concat user_input and bspan? or call reader.
+        response = self.response_decoder(concat, encoded)
 
 
 def init_embedding_model(model, r):

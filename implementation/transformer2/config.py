@@ -11,7 +11,7 @@ class _Config:
 
         self.mode = 'unknown'
         self.m = 'TSD'
-        self.prev_z_method = 'none'
+        self.prev_z_method = 'concat'
         self.dataset = 'unknown'
 
         self.seed = 0
