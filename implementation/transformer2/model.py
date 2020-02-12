@@ -118,7 +118,7 @@ class BSpanDecoder(nn.Module):
         tgt = self.pos_encoder(tgt)
         mask = tgt.eq(0)  # 0 corresponds to <pad>
         tgt_mask = self._generate_square_subsequent_mask(tgt.shape[0])
-        output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, src_key_padding_mask=mask)
+        output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=mask)
         output = self.linear(output)
         return output
 
@@ -172,7 +172,7 @@ class ResponseDecoder(nn.Module):
         tgt = self.pos_encoder(tgt)
         mask = tgt.eq(0)  # 0 corresponds to <pad>
         tgt_mask = self._generate_square_subsequent_mask(tgt.shape[0])
-        output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, src_key_padding_mask=mask)
+        output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=mask)
         output = self.linear(output)
         return output
 
