@@ -1,15 +1,16 @@
-#!/usr/bin/env python3 
+#!/usr/bin/env python3
 
 # This file is only used for understanding reader.py
 
 from config import global_config as cfg
 import reader
+import torch
 
 def print_dialogues(r):
     """ Prints dialogues: user_input, bspan and machine response 
     for one batch. """
 
-    for batch in r.mini_batch_iterator('train'):
+    for batch in r.mini_batch_iterator('test'):
         # print(len(batch))
         for d in batch: # first is turn0, then turn1
             # x = reader.get_glove_matrix
@@ -25,7 +26,7 @@ def print_dialogues(r):
                     x = r.vocab.sentence_decode(user)
                     print(x)
                     x = r.vocab.sentence_decode(bspan)
-                    print('bspan:', end=' ')
+                    # print('bspan:', end=' ')
                     print(x)
                     x = r.vocab.sentence_decode(response)
                     print(x)
@@ -50,19 +51,20 @@ def with_convert(r):
             # print(u_input)
             # print(d['user'])
             # return
-            for ui, zi, mi, uio, zio, mio in zip(u_input, z_input, m_input, d['user'], d['bspan'], d['response']):
-                x = r.vocab.sentence_decode(ui)
-                print('u_input: {}'.format(x))
+            for ui, zi, mi, uio, zio, mio, deg in zip(u_input, z_input, m_input, d['user'], d['bspan'], d['response'], degree_input):
+                # x = r.vocab.sentence_decode(ui)
+                # print('u_input: {}'.format(x))
                 x = r.vocab.sentence_decode(uio)
                 print('u_origi: {}'.format(x))
-                x = r.vocab.sentence_decode(zi)
-                print('z_input: {}'.format(x))
+                # x = r.vocab.sentence_decode(zi)
+                # print('z_input: {}'.format(x))
                 x = r.vocab.sentence_decode(zio)
                 print('z_origi: {}'.format(x))
-                x = r.vocab.sentence_decode(mi)
-                print('m_input: {}'.format(x))
+                # x = r.vocab.sentence_decode(mi)
+                # print('m_input: {}'.format(x))
                 x = r.vocab.sentence_decode(mio)
                 print('m_origi: {}'.format(x))
+                print('degree: {}'.format(deg))
 
                 print('------------')
             print('#'*50)
@@ -89,6 +91,11 @@ def max_len(reader):
     print(r.vocab.sentence_decode(sent))
     print(y)
 
+def test_subq(sz):
+    mask = (torch.triu(torch.ones(sz+5, sz), -5) == 1).transpose(0, 1)
+    mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+    return mask
+
 if __name__=='__main__':
     # cfg.init_handler('tsdf-kvret')
     # cfg.dataset = 'kvret'
@@ -98,4 +105,20 @@ if __name__=='__main__':
     r = reader.CamRest676Reader()
     # max_len(r)
     with_convert(r)
+    # deg = torch.rand(3, 4)
+    # print(deg)
+    # print(deg.shape)
+
+    # deg_temp = torch.zeros(1, 3, 10)
+    # deg_temp[:,:, :4] = deg
+    # print(deg_temp)
+    # print(deg_temp.shape)
+
+    # # seq_len 5, batch 3, emb 10
+    # tgt = torch.ones(5, 3, 10)
+    # print(tgt.shape)
+    # tgt = torch.cat([deg_temp, tgt], 0)
+    # print(tgt.shape)
+    # print(tgt)
+    # print(test_subq(6))
 

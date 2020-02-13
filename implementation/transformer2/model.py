@@ -115,7 +115,8 @@ class BSpanDecoder(nn.Module):
 
     def forward(self, tgt, memory):
         """ Call decoder
-        `tgt` should contain <go>/<go2> tag 
+        `tgt` should contain <go>/<go2> tag ??
+        TODO: should it contain <go>???
         the decoder should be called repeatedly
 
         Args:
@@ -130,7 +131,7 @@ class BSpanDecoder(nn.Module):
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
         mask = tgt.eq(0)  # 0 corresponds to <pad>
-        tgt_mask = self._generate_square_subsequent_mask(tgt.shape[0])
+        tgt_mask = self._generate_square_subsequent_mask(tgt.size(0))
         output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=mask)
         output = self.linear(output)
         return output
@@ -168,30 +169,43 @@ class ResponseDecoder(nn.Module):
     def train(t):
         self.transformer_decoder.train(t)
 
-    def _generate_square_subsequent_mask(self, sz):
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+    def _generate_square_subsequent_mask(self, sz, bspan_size):
+        # we do not mask first 2 positions (1 for degree, 1 for <go> token)
+        mask = (torch.triu(torch.ones(sz+1+bspan_size, sz), diagonal=-(bspan_size+1)) == 1).transpose(0, 1)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
-    def forward(self, tgt, memory, degree):
+    def forward(self, tgt, memory, bspan, degree):
         """ Call decoder
 
         Args:
-            tgt: input to transformer_decoder
+            tgt: input to transformer_decoder, shape: (seq_len, batch)
             memory: output from the encoder
-            degree: degree is the 'output from database'
+            degree: degree is the 'output from database', shape: (batch, cfg.degree_size)
 
         Returns:
             output from linear layer, (vocab size), pre softmax
 
         """
+
+        # TODO add <go> token? and sort out dimensions
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
         mask = tgt.eq(0)  # 0 corresponds to <pad>
-        tgt_mask = self._generate_square_subsequent_mask(tgt.shape[0])
-        # tgt should contain degree
-        # TODO `concat` degree with `tgt` and mask only non-degree timesteps
-        # tgt = torch.cat([degree, tgt], dim=2)  # 1 is for <GO> token - concat along embeddings dimension
+        # TODO Bspan Size
+        tgt_mask = self._generate_square_subsequent_mask(tgt.size(0))
+
+
+        # TODO 
+        #   1. concat `bdecoder_input` with vocab.encode('<go>') and rdecoder_inpu
+        raise NotImplementedError()
+
+        # TODO degree could be added through another Linear layer:
+        # tgt.size(1) is batch size (I know, why dim=1, but nn.Transformer wants it that way
+        degree_reshaped = torch.zeros(1, tgt.size(1), cfg.embedding_size)
+        degree_reshaped[:,:, :cfg.degree_size] = degree  # add 1 more timestep (the first one as one-hot degree)
+        tgt = torch.cat([degree_reshaped, tgt], dim=0)  # concat along sequence lenght axis
+
         output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=mask)
         output = self.linear(output)
         return output
@@ -230,15 +244,29 @@ def SequicityModel(nn.Module):
         Returns:
 
         """
-        # TODO during training, should we pass output of BSpanDecoder to ResponseDecoder,
-        # or use 'teacher forcing' and pass the bspan from training data?
+        # TODO transpose input to (seq_len, batch)
+        user_input = user_input.transpose(0,1)
+        bdecoder_input = bdecoder_input.transpose(0,1)
+        rdecoder_input = rdecoder_input.transpose(0,1)
+
         encoded = self.encoder(user_input)
+
+        # decode all at once, no dependency between bspans
+        # or decode first EOS_Z1 and then EOS_Z2 - (seq_len) steps
         bspan = self.bspan_decoder(bdecoder_input, encoded)
-        # SOLVED: xTODO concat user_input and bspan? or call reader.
-        # TODO There may be more possibilities how to attend to 'bspan'
-        #    1. DO THIS: concat it with user_input (during training and teacher forcing, bspan is already contained in user_input)
-        #    2. encode it with another encoder and concat it with user encoder output
-        response = self.response_decoder(concat, encoded, degree)
+        # TODO decode bspan
+        raise NotImplementedError()
+
+        if self.training:
+            # TODO concat `decoded_bspan` with degree and r_decoder_input
+            for t in range(512):
+                raise NotImplementedError()
+            response = self.response_decoder(concat, encoded, bdecoder_input, degree)
+        else:
+            # use decoded bspan instead of the supplied one
+            response = self.response_decoder(concat, encoded, bspan_decoded, degree)
+            raise NotImplementedError()
+
 
 
 def init_embedding_model(model, r):
