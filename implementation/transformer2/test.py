@@ -92,7 +92,7 @@ def max_len(reader):
     print(y)
 
 def test_subq(sz):
-    mask = (torch.triu(torch.ones(sz+5, sz), -5) == 1).transpose(0, 1)
+    mask = (torch.triu(torch.ones(sz+5, sz+5), -5) == 1).transpose(0, 1)
     mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
     return mask
 
@@ -108,16 +108,16 @@ if __name__=='__main__':
     cfg.dataset = 'camrest'
     r = reader.CamRest676Reader()
     # max_len(r)
-    # with_convert(r)
-    ten = torch.zeros(5, 6)
-    ten[:,:2] = torch.rand(5, 2)
-    ten[1,2] = 1.243
-    # ten[2,2] = 1.243
-    ten[2,3] = 1.243
-    print(ten)
-    # mask = ten == 0
-    # ten = ten[:,:].nonzero()
-    print(ten.split(2))
+    # # with_convert(r)
+    # ten = torch.zeros(5, 6)
+    # ten[:,:2] = torch.rand(5, 2)
+    # ten[1,2] = 1.243
+    # # ten[2,2] = 1.243
+    # ten[2,3] = 1.243
+    # print(ten)
+    # # mask = ten == 0
+    # # ten = ten[:,:].nonzero()
+    # print(ten.split(2))
 
-    # print(test_subq(6))
+    print(test_subq(6))
 

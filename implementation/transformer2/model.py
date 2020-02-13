@@ -63,7 +63,7 @@ class Encoder(nn.Module):
         initrange = 0.1
         self.transformer_encoder.weight.data.uniform_(-initrange, initrange)
 
-    def train(t):
+    def train(self, t):
         self.transformer_encoder.train(t)
 
     def forward(self, src):
@@ -103,7 +103,7 @@ class BSpanDecoder(nn.Module):
         self.linear.bias.data.zero_()
         self.linear.weight.data.uniform_(-initrange, initrange)
 
-    def train(t):
+    def train(self, t):
         self.transformer_decoder.train(t)
 
     def _generate_square_subsequent_mask(self, sz):
@@ -166,12 +166,12 @@ class ResponseDecoder(nn.Module):
         self.linear.bias.data.zero_()
         self.linear.weight.data.uniform_(-initrange, initrange)
 
-    def train(t):
+    def train(self, t):
         self.transformer_decoder.train(t)
 
     def _generate_square_subsequent_mask(self, sz, bspan_size):
         # we do not mask first 2 positions (1 for degree, 1 for <go> token)
-        mask = (torch.triu(torch.ones(sz+1+bspan_size, sz), diagonal=-(bspan_size+1)) == 1).transpose(0, 1)
+        mask = (torch.triu(torch.ones(sz+1+bspan_size, sz+1+bspan_size), diagonal=-(bspan_size+1)) == 1).transpose(0, 1)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
@@ -229,11 +229,27 @@ def SequicityModel(nn.Module):
         self.bspan_decoder = BSpanDecoder(ntoken, ninp, nhead, nhid, dropout, embedding)
         self.response_decoder = BSpanDecoder(ntoken, ninp, nhead, nhid, dropout, embedding)
 
-    def train(t):
+    def train(self, t):
         super().train(t)
         self.encoder.train(t)
         self.bspan_decoder.train(t)
         self.response_decoder.train(t)
+
+    def _greedy_decode_output(self, decoder, encoder_output, initial_decoder_input, eos_id):
+        """ Iteratively run decoder until `eos_id` is reached
+
+        Args:
+            decoder: instance of either bspan or response decoder
+            encoder_output: output from encoder
+            initial_decoder_input: either <go>/<go2> symbol or "degree"<go> etc.
+            eos_id: either id of EOS_M, EOS_Z1, EOS_Z2
+
+        """
+        for t in range(cfg.max_ts):
+            if current_word == eos_id:
+                break
+            # TODO finish
+        raise NotImplementedError()
 
     def forward(self, user_input, bdecoder_input, rdecoder_input, degree):
         """ Call perform one step in sequicity.
@@ -251,29 +267,52 @@ def SequicityModel(nn.Module):
 
         encoded = self.encoder(user_input)
 
-        # decode all at once, no dependency between bspans
-        # or decode first EOS_Z1 and then EOS_Z2 - (seq_len) steps
+        if self.training
+            # TODO decode first EOS_Z1 and then EOS_Z2 = seq_len steps
+            bdecoder_input = bdecoder_input
+            raise NotImplementedError()
+        else:
+            bdecoder_input = torch.zeros(cfg.max_ts, bdecoder_input.size(1)) #(seq_len, batch)
+            # bdecoder_input[:,  # finish (ondra)
+            raise NotImplementedError()
         bspan = self.bspan_decoder(bdecoder_input, encoded)
-        # TODO decode bspan
-        raise NotImplementedError()
-        bspan_decoded = nn.Softmax(bspan, dim=-1)
+
+        # TODO move this to _greedy_decode_output
+        bspan_decoded = nn.Softmax(bspan, dim=-1).transpose(0,1)  # (batch_size, seq_len) 
+        bspan_decoded_no_padding = remove_padding(bspan_decoded, dim=1)
 
         if self.training:
-            # TODO concat `decoded_bspan` with degree and r_decoder_input
-            for t in range(128):
-            
-                if current_word == 'EOS_M':
-                    break
-                raise NotImplementedError()
-                response = self.response_decoder(concat, encoded, bdecoder_input, degree)
+            # during training we will do only one pass through decoder and train on 
+            # probabilities, outputs of softmax instead of one-hot decoded words.
+            #response = self.response_decoder(concat, encoded, bdecoder_input, degree)
         else:
             # use decoded bspan instead of the supplied one
-            response = self.response_decoder(concat, encoded, bspan_decoded, degree)
+            # TODO concat `decoded_bspan` with degree and r_decoder_input
+            #response = self.response_decoder(concat, encoded, bspan_decoded, degree)
             raise NotImplementedError()
 
-def first_zero_index(tensor, dim=-1):
-    mask = tensor == 0
-    tensor
+def remove_padding(tensor, dim=-1):
+    """ Receives a tensor which is padded with zeros.
+    Return a list of tensors where the trailing
+    zeros have been removed.
+
+    Args:
+        tensor: tensor to remove padding on
+        dim: on which dimension is the padding
+
+    Example:
+        > x = Tensor([
+            [1 2 0 0]
+            [3 0 1 0]
+            [1 1 1 1]
+          ])
+        > remove_padding(x, dim=1)
+        > list([ [1 2], [3], [1 1 1 1] ])
+
+    """
+    # TODO implement, ideally with torch.
+    # this has lower priority
+    raise NotImplementedError()
 
 def init_embedding_model(model, r):
     """ Set glove embeddings for model, r is a reader instance """
