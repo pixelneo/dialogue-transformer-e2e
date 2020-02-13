@@ -256,18 +256,24 @@ def SequicityModel(nn.Module):
         bspan = self.bspan_decoder(bdecoder_input, encoded)
         # TODO decode bspan
         raise NotImplementedError()
+        bspan_decoded = nn.Softmax(bspan, dim=-1)
 
         if self.training:
             # TODO concat `decoded_bspan` with degree and r_decoder_input
-            for t in range(512):
+            for t in range(128):
+            
+                if current_word == 'EOS_M':
+                    break
                 raise NotImplementedError()
-            response = self.response_decoder(concat, encoded, bdecoder_input, degree)
+                response = self.response_decoder(concat, encoded, bdecoder_input, degree)
         else:
             # use decoded bspan instead of the supplied one
             response = self.response_decoder(concat, encoded, bspan_decoded, degree)
             raise NotImplementedError()
 
-
+def first_zero_index(tensor, dim=-1):
+    mask = tensor == 0
+    tensor
 
 def init_embedding_model(model, r):
     """ Set glove embeddings for model, r is a reader instance """

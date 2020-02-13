@@ -96,6 +96,10 @@ def test_subq(sz):
     mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
     return mask
 
+def first_zero_index(tensor, dim=-1):
+    mask = tensor == 0
+    _, ind = torch.min(mask, dim=1)
+
 if __name__=='__main__':
     # cfg.init_handler('tsdf-kvret')
     # cfg.dataset = 'kvret'
@@ -104,21 +108,16 @@ if __name__=='__main__':
     cfg.dataset = 'camrest'
     r = reader.CamRest676Reader()
     # max_len(r)
-    with_convert(r)
-    # deg = torch.rand(3, 4)
-    # print(deg)
-    # print(deg.shape)
+    # with_convert(r)
+    ten = torch.zeros(5, 6)
+    ten[:,:2] = torch.rand(5, 2)
+    ten[1,2] = 1.243
+    # ten[2,2] = 1.243
+    ten[2,3] = 1.243
+    print(ten)
+    # mask = ten == 0
+    # ten = ten[:,:].nonzero()
+    print(ten.split(2))
 
-    # deg_temp = torch.zeros(1, 3, 10)
-    # deg_temp[:,:, :4] = deg
-    # print(deg_temp)
-    # print(deg_temp.shape)
-
-    # # seq_len 5, batch 3, emb 10
-    # tgt = torch.ones(5, 3, 10)
-    # print(tgt.shape)
-    # tgt = torch.cat([deg_temp, tgt], 0)
-    # print(tgt.shape)
-    # print(tgt)
     # print(test_subq(6))
 
