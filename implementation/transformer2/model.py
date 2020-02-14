@@ -74,7 +74,7 @@ class Encoder(nn.Module):
         return output
 
 class BSpanDecoder(nn.Module):
-    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5, embedding=None):
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, reader, dropout=0.5, embedding=None):
         """
         Args:
             ntoken: vocab size
@@ -82,6 +82,7 @@ class BSpanDecoder(nn.Module):
             nhead: number of heads
             nhid: hidden layer size
             nlayers: number of layers
+            reader: instance of `Reader`
             dropout: dropout rate
         """
         super().__init__()
@@ -94,6 +95,7 @@ class BSpanDecoder(nn.Module):
         self.embedding = nn.Embedding(ntoken, ninp) if embedding is None else embedding
         self.ninp = ninp
         self.linear = nn.Linear(ninp, ntoken)
+        self.reader = reader
 
         self.init_weights()
 
@@ -120,14 +122,16 @@ class BSpanDecoder(nn.Module):
         the decoder should be called repeatedly
 
         Args:
-            tgt: input to transformer_decoder
+            tgt: input to transformer_decoder, shape: (seq, batch)
             memory: output from the encoder
 
         Returns:
             output from linear layer, (vocab size), pre softmax
 
         """
-        # TODO  `tgt` should contain <go>/<go2> tag: which, when?
+        go_tokens = torch.zeros((1, tgt.size(1)) + 3  # GO_2 token has index 3
+        tgt = torch.cat([go_tokens, tgt], dim=0)  # concat GO_2 token along sequence lenght axis
+
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
         mask = tgt.eq(0)  # 0 corresponds to <pad>
@@ -137,7 +141,7 @@ class BSpanDecoder(nn.Module):
         return output
 
 class ResponseDecoder(nn.Module):
-    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5, embedding=None):
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, reader, dropout=0.5, embedding=None):
         """
         Args:
             ntoken: vocab size
@@ -145,6 +149,7 @@ class ResponseDecoder(nn.Module):
             nhead: number of heads
             nhid: hidden layer size
             nlayers: number of layers
+            reader: instance of `Reader`
             dropout: dropout rate
         """
         super().__init__()
@@ -157,6 +162,7 @@ class ResponseDecoder(nn.Module):
         self.embedding = nn.Embedding(ntoken, ninp) if embedding is None else embedding
         self.ninp = ninp
         self.linear = nn.Linear(ninp, ntoken)
+        self.reader = reader
 
         self.init_weights()
 
@@ -189,6 +195,14 @@ class ResponseDecoder(nn.Module):
         """
 
         # TODO add <go> token? and sort out dimensions
+        go_tokens = torch.zeros((1, tgt.size(1)) + 3  # GO_2 token has index 3
+        tgt = torch.cat([go_tokens, tgt], dim=0)  # concat GO_2 token along sequence lenght axis
+
+        # TODO 
+        #   1. concat `bdecoder_input` with vocab.encode('<go>') and rdecoder_inpu
+        # <go> token for r_decoder has index 1
+        raise NotImplementedError()
+
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
         mask = tgt.eq(0)  # 0 corresponds to <pad>
@@ -196,9 +210,6 @@ class ResponseDecoder(nn.Module):
         tgt_mask = self._generate_square_subsequent_mask(tgt.size(0))
 
 
-        # TODO 
-        #   1. concat `bdecoder_input` with vocab.encode('<go>') and rdecoder_inpu
-        raise NotImplementedError()
 
         # TODO degree could be added through another Linear layer:
         # tgt.size(1) is batch size (I know, why dim=1, but nn.Transformer wants it that way
@@ -211,7 +222,7 @@ class ResponseDecoder(nn.Module):
         return output
 
 def SequicityModel(nn.Module):
-    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, reader, dropout=0.5):
         """
         Args:
             ntoken: vocab size
@@ -219,15 +230,18 @@ def SequicityModel(nn.Module):
             nhead: number of heads
             nhid: hidden layer size
             nlayers: number of layers
+            reader: instance of `Reader`
             dropout: dropout rate
         """
         super().__init__()
         self.model_type = 'Transformer'
         self.embedding = nn.Embedding(ntoken, ninp) if embedding is None else embedding
 
-        self.encoder = Encoder(ntoken, ninp, nhead, nhid, dropout, embedding)
-        self.bspan_decoder = BSpanDecoder(ntoken, ninp, nhead, nhid, dropout, embedding)
-        self.response_decoder = BSpanDecoder(ntoken, ninp, nhead, nhid, dropout, embedding)
+        self.encoder = Encoder(ntoken, ninp, nhead, nhid, dropout)
+        self.bspan_decoder = BSpanDecoder(ntoken, ninp, nhead, nhid, reader, dropout, embedding)
+        self.response_decoder = BSpanDecoder(ntoken, ninp, nhead, nhid, reader, dropout, embedding)
+
+        self.reader = reader
 
     def train(self, t):
         super().train(t)
