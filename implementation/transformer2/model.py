@@ -204,6 +204,7 @@ class ResponseDecoder(nn.Module):
         # TODO how to solve this, when there is one padding mask for a batch?
         #    we do not mask bspan, degree and go token.
         #    eg. [cheap restaurant EOS_Z1 EOS_Z2 01000 GO1 mask mask mask ..... ]
+        # HIGH PRIORITY
         
         bspan_size = None
         raise NotImplementedError()
@@ -247,17 +248,27 @@ def SequicityModel(nn.Module):
         self.bspan_decoder.train(t)
         self.response_decoder.train(t)
 
-    def _greedy_decode_output(self, decoder, encoder_output, initial_decoder_input, eos_id):
+    def _greedy_decode_output(self, decoder, encoder_output, initial_decoder_input, eos_id, reponse=False, bspan=None, degree=None):
         """ Iteratively run decoder until `eos_id` is reached
 
         Args:
             decoder: instance of either bspan or response decoder
             encoder_output: output from encoder
-            initial_decoder_input: either <go>/<go2> symbol or "degree"<go> etc.
-            eos_id: either id of EOS_M, EOS_Z1, EOS_Z2
+            initial_decoder_input: target
+            eos_id: id of either EOS_M, EOS_Z1, EOS_Z2
+            bspan: use only for ResponseDecoder
+            degree: use only for ResponseDecoder
 
         """
+        input = initial_decoder_input
+        decoded_sentences = torch.zeros_like(input)
         for t in range(cfg.max_ts):
+            if response:  # response decoder
+                out = decoder(input, encoder_output, bspan, degree)
+            else:
+                out = decoder(input, encoder_output)
+            # TODO get currently decoded word (for each turn in batch (may have different idx))
+            
             if current_word == eos_id:
                 break
             # TODO finish
