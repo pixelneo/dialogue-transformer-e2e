@@ -117,8 +117,6 @@ class BSpanDecoder(nn.Module):
 
     def forward(self, tgt, memory):
         """ Call decoder
-        `tgt` should contain <go>/<go2> tag ??
-        TODO: should it contain <go>???
         the decoder should be called repeatedly
 
         Args:
@@ -194,25 +192,25 @@ class ResponseDecoder(nn.Module):
 
         """
 
-        # TODO add <go> token? and sort out dimensions
-        go_tokens = torch.zeros((1, tgt.size(1)) + 3  # GO_2 token has index 3
-        tgt = torch.cat([go_tokens, tgt], dim=0)  # concat GO_2 token along sequence lenght axis
-
-        # TODO 
-        #   1. concat `bdecoder_input` with vocab.encode('<go>') and rdecoder_inpu
-        # <go> token for r_decoder has index 1
-        raise NotImplementedError()
+        go_tokens = torch.ones((1, tgt.size(1))  # GO token has index 1
+        
+        tgt = torch.cat([bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence lenght axis
 
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
         mask = tgt.eq(0)  # 0 corresponds to <pad>
-        # TODO Bspan Size
-        tgt_mask = self._generate_square_subsequent_mask(tgt.size(0))
+        
+        # TODO Bspan Size (can be different for every turn in batch?)
+        # TODO how to solve this, when there is one padding mask for a batch?
+        #    we do not mask bspan, degree and go token.
+        #    eg. [cheap restaurant EOS_Z1 EOS_Z2 01000 GO1 mask mask mask ..... ]
+        
+        bspan_size = None
+        raise NotImplementedError()
+        tgt_mask = self._generate_square_subsequent_mask(tgt.size(0), bspan_size)
 
 
-
-        # TODO degree could be added through another Linear layer:
-        # tgt.size(1) is batch size (I know, why dim=1, but nn.Transformer wants it that way
+        # tgt.size(1) is batch size (I know, why dim=1, but nn.Transformer wants it that way)
         degree_reshaped = torch.zeros(1, tgt.size(1), cfg.embedding_size)
         degree_reshaped[:,:, :cfg.degree_size] = degree  # add 1 more timestep (the first one as one-hot degree)
         tgt = torch.cat([degree_reshaped, tgt], dim=0)  # concat along sequence lenght axis
@@ -274,7 +272,7 @@ def SequicityModel(nn.Module):
         Returns:
 
         """
-        # TODO transpose input to (seq_len, batch)
+        # transpose input to (seq_len, batch)
         user_input = user_input.transpose(0,1)
         bdecoder_input = bdecoder_input.transpose(0,1)
         rdecoder_input = rdecoder_input.transpose(0,1)
