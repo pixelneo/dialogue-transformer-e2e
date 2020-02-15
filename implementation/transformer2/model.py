@@ -12,6 +12,7 @@ from config import global_config as cfg
 # TODO:
 # 1. (maybe) do encoding for user and machine separately (additional positional encoding)
 # 2. does torch transformer do teacher forcing? should it?
+# 3. (HIGH PRIORITY) how to pass bspan to ResponseDecoder. Put it as an input and dont mask it. Make constant size for bspan (~ 20-30 words) and add some padding (new one?)
 
 # Notes
 # 1. EOS_Z1 ends section of bspan containing 'informables', EOS_Z2 ends 'requestables'
@@ -192,20 +193,19 @@ class ResponseDecoder(nn.Module):
 
         """
 
-        go_tokens = torch.ones((1, tgt.size(1))  # GO token has index 1
-        
+        go_tokens = torch.ones((1, tgt.size(1)))  # GO token has index 1
+
         tgt = torch.cat([bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence lenght axis
 
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
         mask = tgt.eq(0)  # 0 corresponds to <pad>
-        
+
         # TODO Bspan Size (can be different for every turn in batch?)
-        # TODO how to solve this, when there is one padding mask for a batch?
+        # TODO (HIGH PRIORITY) how to solve this, when there is one padding mask for a batch?
         #    we do not mask bspan, degree and go token.
         #    eg. [cheap restaurant EOS_Z1 EOS_Z2 01000 GO1 mask mask mask ..... ]
-        # HIGH PRIORITY
-        
+
         bspan_size = None
         raise NotImplementedError()
         tgt_mask = self._generate_square_subsequent_mask(tgt.size(0), bspan_size)
@@ -260,15 +260,15 @@ def SequicityModel(nn.Module):
             degree: use only for ResponseDecoder
 
         """
-        input = initial_decoder_input
-        decoded_sentences = torch.zeros_like(input)
+        input_ = initial_decoder_input
+        decoded_sentences = torch.zeros_like(input_)
         for t in range(cfg.max_ts):
             if response:  # response decoder
-                out = decoder(input, encoder_output, bspan, degree)
+                out = decoder(input_, encoder_output, bspan, degree)
             else:
-                out = decoder(input, encoder_output)
-            # TODO get currently decoded word (for each turn in batch (may have different idx))
-            
+                out = decoder(input_, encoder_output)
+            # TODO (HIGH PRIORITY) get currently decoded word (for each turn in batch (may have different idx))
+
             if current_word == eos_id:
                 break
             # TODO finish

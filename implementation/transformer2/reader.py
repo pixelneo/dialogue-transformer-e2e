@@ -87,6 +87,7 @@ class _ReaderBase:
                 self._absolute_add_item('<go>')  # 1
                 self._absolute_add_item('<unk>')  # 2
                 self._absolute_add_item('<go2>')  # 3
+                self._absolute_add_item('<pad2>')  # 4 this is for padding bspan from response
 
         def load_vocab(self, vocab_path):
             f = open(vocab_path, 'rb')
