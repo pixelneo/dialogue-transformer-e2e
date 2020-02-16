@@ -12,7 +12,9 @@ from config import global_config as cfg
 # TODO:
 # 1. (maybe) do encoding for user and machine separately (additional positional encoding)
 # 2. does torch transformer do teacher forcing? should it?
-# 3. (HIGH PRIORITY) how to pass bspan to ResponseDecoder. Put it as an input and dont mask it. Make constant size for bspan (~ 20-30 words) and add some padding (new one?)
+# 3. (solved) (HIGH PRIORITY) how to pass bspan to ResponseDecoder. Put it as an input and dont mask it. Make constant size for bspan (~ 20-30 words) and add some padding (new one?)
+# 4. (A BIG TODO) probably a stupid question (ondra), but where is specified the size of input to transformer??? (either encoder, or decoder)
+#       is it the `d_model` (=`ninp`) variable????
 
 # Notes
 # 1. EOS_Z1 ends section of bspan containing 'informables', EOS_Z2 ends 'requestables'
@@ -178,7 +180,7 @@ class ResponseDecoder(nn.Module):
         self.transformer_decoder.train(t)
 
     def _generate_square_subsequent_mask(self, sz):
-        # we do not mask first 2 positions (1 for degree, 1 for <go> token)
+        # we do not mask the first positions (1 for degree, 1 for <go> token and 'some' for bspan)
         bspan_size = self.params['bspan_size']
         mask = (torch.triu(torch.ones(sz+1+bspan_size, sz+1+bspan_size), diagonal=-(bspan_size+1)) == 1).transpose(0, 1)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
@@ -199,7 +201,7 @@ class ResponseDecoder(nn.Module):
 
         go_tokens = torch.ones((1, tgt.size(1)))  # GO token has index 1
 
-        tgt = torch.cat([bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence lenght axis
+        tgt = torch.cat([bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence length axis
 
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
@@ -212,10 +214,10 @@ class ResponseDecoder(nn.Module):
         #    eg. [cheap restaurant EOS_Z1 EOS_Z2 PAD2 .... PAD2 01000 GO1 mask mask mask ..... ]
         #    ... [            ...          bspan    ... padding degree go     ....     masking ]
 
-        bspan_size = None
-        raise NotImplementedError()
-        tgt_mask = self._generate_square_subsequent_mask(tgt.size(0), bspan_size)
 
+        # A BIG TODO: the size of `tgt` has to take the size of `bspan` (+1+1 for degree, go)  into account
+        bspan_size = self.params['bspan_size']  # always the same
+        tgt_mask = self._generate_square_subsequent_mask(tgt.size(0), bspan_size)
 
         # tgt.size(1) is batch size (I know, why dim=1, but nn.Transformer wants it that way)
         degree_reshaped = torch.zeros(1, tgt.size(1), cfg.embedding_size)
@@ -255,7 +257,7 @@ def SequicityModel(nn.Module):
         self.bspan_decoder.train(t)
         self.response_decoder.train(t)
 
-    def _greedy_decode_output(self, decoder, encoder_output, initial_decoder_input, eos_id, reponse=False, bspan=None, degree=None):
+    def _greedy_decode_output(self, decoder, encoder_output, initial_decoder_input, eos_id, max_ts, response=False, bspan=None, degree=None):
         """ Autoregressive decoder: decode one step at a time, and run again with new word
 
         Args:
@@ -263,13 +265,19 @@ def SequicityModel(nn.Module):
             encoder_output: output from encoder
             initial_decoder_input: target
             eos_id: id of either EOS_M, EOS_Z1, EOS_Z2
+            max_ts: max timestep, different for BspanDec and ResponDec
             bspan: use only for ResponseDecoder
             degree: use only for ResponseDecoder
 
+        Returns:
+            a tensor, shape (seq_len, batch) with decoded output
+
         """
         input_ = initial_decoder_input  # shape (seq_len, batch)?
-        decoded_sentences = torch.zeros_like(input_)
-        for t in range(cfg.max_ts):
+        pad_id = 0 if response else 4  # 4 is index for <pad2>
+        decoded_sentences = torch.zeros_like(input_) * pad_id
+        mask = ones_like(input_.size(1)).bool()  # shape: batch
+        for t in range(max_ts):
             if response:  # response decoder
                 out = decoder(input_, encoder_output, bspan, degree)
             else:
@@ -278,18 +286,20 @@ def SequicityModel(nn.Module):
             # probs = nn.Softmax(out, dim=-1)  # may not be true: shape: (seq_len, batch, probs)
 
             probs = nn.Softmax(out[t,:,:], dim=-1)  # get prob for only t timestep (1,batch,probs)?
-
             _, inds = torch.topk(probs, 1)  # greedy decode (1, batch, 1)
 
             inds.squeeze_(-1)  # (1, batch, 1) -> (1, batch)
             inds.squeeze_(0)  # (batch)
 
-            decoded_sentences[t,:] = inds  # set decoded word at time step t for the whole batch
+            decoded_sentences[t,:] = torch.masked_scatter(mask, inds)  # set decoded word at time step t for the whole batch
             input_[t, :] = inds
 
-            # TODO set mask if (correct) EOS reached.
-            #   still continue with decoding, only do not store additional decoded
-            #   words for this turn in batch (this varies for every turn in batch!!!)
+            # set mask if EOS is reached
+            current_t_mask = (inds != eos_id)  # 0 if eos at t timestep
+            mask = current_t_mask & mask
+
+        return decoded_sentences
+
 
 
     def forward(self, user_input, bdecoder_input, rdecoder_input, degree):
@@ -309,25 +319,25 @@ def SequicityModel(nn.Module):
         encoded = self.encoder(user_input)
 
         if self.training
-            # TODO decode first EOS_Z1 and then EOS_Z2 = seq_len steps
             bdecoder_input = bdecoder_input
-            raise NotImplementedError()
         else:
-            bdecoder_input = torch.zeros(cfg.max_ts, bdecoder_input.size(1)) #(seq_len, batch)
-            # bdecoder_input[:,  # finish (ondra)
-            raise NotImplementedError()
-        bspan = self.bspan_decoder(bdecoder_input, encoded)
+            bdecoder_input = torch.zeros(cfg.max_ts-1, bdecoder_input.size(1)) # go token is added later, in BSpanDecoder (seq_len, batch)
 
-        # TODO move this to _greedy_decode_output
-        bspan_decoded = nn.Softmax(bspan, dim=-1).transpose(0,1)  # (batch_size, seq_len) 
-        bspan_decoded_no_padding = remove_padding(bspan_decoded, dim=1)
+        # Even during training, we always have to decode BSpan, because we pass it to Response decoder
+        bspan_decoded = self._greedy_decode_output(\
+                                   self.bspan_decoder, \
+                                   encoded, \
+                                   bdecoder_input, \
+                                   self.reader.vocab.encode('EOS_Z2'),\
+                                   self.params['bspan_size'])
+
 
         if self.training:
             # during training we will do only one pass through decoder and train on 
             # probabilities, outputs of softmax instead of one-hot decoded words.
-            #response = self.response_decoder(concat, encoded, bdecoder_input, degree)
+            # TODO should we use decoded bspan or the supplied one? if supplied, we have to train BSpanDecoder somehow.
+            response = self.response_decoder(concat, encoded, bspan_decoded, degree)
         else:
-            # use decoded bspan instead of the supplied one
             # TODO concat `decoded_bspan` with degree and r_decoder_input
             #response = self.response_decoder(concat, encoded, bspan_decoded, degree)
             raise NotImplementedError()
