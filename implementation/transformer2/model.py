@@ -16,6 +16,7 @@ from config import global_config as cfg
 # 4. (A BIG TODO) probably a stupid question (ondra), but where is specified the size of input to transformer??? (either encoder, or decoder)
 #       is it the `d_model` (=`ninp`) variable????
 # 5. Sort out dimensions of inputs to en/decoders. This certainly is not working right now!! 
+# 6. Do the training (define, loss, training loop, ...)
 
 # Notes
 # 1. EOS_Z1 ends section of bspan containing 'informables', EOS_Z2 ends 'requestables'
