@@ -15,6 +15,7 @@ from config import global_config as cfg
 # 3. (solved) (HIGH PRIORITY) how to pass bspan to ResponseDecoder. Put it as an input and dont mask it. Make constant size for bspan (~ 20-30 words) and add some padding (new one?)
 # 4. (A BIG TODO) probably a stupid question (ondra), but where is specified the size of input to transformer??? (either encoder, or decoder)
 #       is it the `d_model` (=`ninp`) variable????
+# 5. Sort out dimensions of inputs to en/decoders. This certainly is not working right now!! 
 
 # Notes
 # 1. EOS_Z1 ends section of bspan containing 'informables', EOS_Z2 ends 'requestables'
@@ -338,8 +339,19 @@ def SequicityModel(nn.Module):
             # TODO should we use decoded bspan or the supplied one? if supplied, we have to train BSpanDecoder somehow.
             response = self.response_decoder(concat, encoded, bspan_decoded, degree)
         else:
-            # TODO concat `decoded_bspan` with degree and r_decoder_input
             #response = self.response_decoder(concat, encoded, bspan_decoded, degree)
+            rdecoder_input = torch.zeros(cfg.max_ts-self.params['bspan_size']-1, rdecoder_input.size(1)) # go token is added later 
+            response = self._greedy_decode_output(\
+                                       self.response_decoder, \
+                                       encoded, \
+                                       rdecoder_input, \
+                                       self.reader.vocab.encode('EOS_M'),\
+                                       cfg.max_ts, \
+                                       True, \
+                                       bspan_decoded, \
+                                       degree)
+
+
             raise NotImplementedError()
 
 def remove_padding(tensor, dim=-1):
@@ -362,7 +374,7 @@ def remove_padding(tensor, dim=-1):
 
     """
     # TODO implement, ideally with torch.
-    # this has lower priority
+    # this has low priority
     raise NotImplementedError()
 
 def init_embedding_model(model, r):
