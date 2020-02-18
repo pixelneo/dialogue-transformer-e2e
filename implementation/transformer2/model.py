@@ -204,6 +204,7 @@ class ResponseDecoder(nn.Module):
         go_tokens = torch.ones((1, tgt.size(1)))  # GO token has index 1
 
         tgt = torch.cat([bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence length axis
+        # TODO pad `tgt` but also think of `degree` which is added later
 
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
@@ -221,6 +222,7 @@ class ResponseDecoder(nn.Module):
         bspan_size = self.params['bspan_size']  # always the same
         tgt_mask = self._generate_square_subsequent_mask(tgt.size(0), bspan_size)
 
+        # TODO this might not works as expected, as there is no positional embedding added to degree
         # tgt.size(1) is batch size (I know, why dim=1, but nn.Transformer wants it that way)
         degree_reshaped = torch.zeros(1, tgt.size(1), cfg.embedding_size)
         degree_reshaped[:,:, :cfg.degree_size] = degree  # add 1 more timestep (the first one as one-hot degree)
