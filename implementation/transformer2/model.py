@@ -202,8 +202,9 @@ class ResponseDecoder(nn.Module):
         """
 
         go_tokens = torch.ones((1, tgt.size(1)))  # GO token has index 1
+        degree_reshaped = torch.zeros(1, tgt.size(1), cfg.embedding_size)
 
-        tgt = torch.cat([bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence length axis
+        tgt = torch.cat([degree_reshaped, bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence length axis
         # TODO pad `tgt` but also think of `degree` which is added later
 
         tgt = self.embedding(tgt) * self.ninp
@@ -222,15 +223,14 @@ class ResponseDecoder(nn.Module):
         bspan_size = self.params['bspan_size']  # always the same
         tgt_mask = self._generate_square_subsequent_mask(tgt.size(0), bspan_size)
 
-        # TODO this might not works as expected, as there is no positional embedding added to degree
         # tgt.size(1) is batch size (I know, why dim=1, but nn.Transformer wants it that way)
-        degree_reshaped = torch.zeros(1, tgt.size(1), cfg.embedding_size)
-        degree_reshaped[:,:, :cfg.degree_size] = degree  # add 1 more timestep (the first one as one-hot degree)
+        degree_reshaped[:, :, :cfg.degree_size] = degree  # add 1 more timestep (the first one as one-hot degree)
         tgt = torch.cat([degree_reshaped, tgt], dim=0)  # concat along sequence lenght axis
 
         output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=mask)
         output = self.linear(output)
         return output
+
 
 def SequicityModel(nn.Module):
     def __init__(self, ntoken, ninp, nhead, nhid, nlayers, reader, params, dropout=0.5):
@@ -340,10 +340,9 @@ def SequicityModel(nn.Module):
             # during training we will do only one pass through decoder and train on 
             # probabilities, outputs of softmax instead of one-hot decoded words.
             # TODO should we use decoded bspan or the supplied one? if supplied, we have to train BSpanDecoder somehow.
-            response = self.response_decoder(concat, encoded, bspan_decoded, degree)
+            response = self.response_decoder(concat, encoded, bspan, degree)
         else:
             #response = self.response_decoder(concat, encoded, bspan_decoded, degree)
-            rdecoder_input = torch.zeros(cfg.max_ts-self.params['bspan_size']-1, rdecoder_input.size(1)) # go token is added later 
             response = self._greedy_decode_output(\
                                        self.response_decoder, \
                                        encoded, \
@@ -355,7 +354,6 @@ def SequicityModel(nn.Module):
                                        degree)
 
 
-            raise NotImplementedError()
 
 def remove_padding(tensor, dim=-1):
     """ Receives a tensor which is padded with zeros.
@@ -393,13 +391,17 @@ def init_embedding(embedding, r):
     return embedding
 
 def get_params():
+    # TODO: make parameter handling great again!
+    # it would be better to use json or yaml (or something else) for setting parameters
     p = {}
     p['ntoken'] = cfg.vocab_size
     p['ninp'] = cfg.embedding_size
-    p['nhead'] = 4
+    p['nhead'] = 2
     p['nhid'] = 64
     p['nlayers'] = 3
-    p['dropout'] = 0.2
+    p['dropout_encoder'] = 0.2
+    p['dropout_bdecoder'] = 0.2
+    p['dropout_rdecoder'] = 0.2
     p['warm_lr'] = 0.1
     p['lr'] = 0.0001
     p['bspan_size'] = 20
@@ -417,9 +419,27 @@ def main_function():
     embedding = nn.Embedding(params['ntoken'], params['ninp'])
     embedding = init_embedding(embedding, r)
 
-    encoder = Encoder(params['ntoken'], params['ninp'], params['nhead'], params['nhid'], params['dropout'], embedding).to(device)
-    bspan_decoder = BSpanDecoder(params['ntoken'], params['ninp'], params['nhead'], params['nhid'], params['dropout'], embedding).to(device)
-    response_decoder = BSpanDecoder(params['ntoken'], params['ninp'], params['nhead'], params['nhid'], params['dropout'], embedding).to(device)
+    encoder = Encoder(
+        params['ntoken'],\
+        params['ninp'],\
+        params['nhead'],\
+        params['nhid'],\
+        params['dropout_encoder'],\
+        embedding).to(device)
+    bspan_decoder = BSpanDecoder(
+        params['ntoken'],\
+        params['ninp'],\
+        params['nhead'],\
+        params['nhid'] - params['bspan_size'] - 1,\
+        params['dropout_bdecoder'],\
+        embedding).to(device)
+    response_decoder = BSpanDecoder(
+        params['ntoken'],\
+        params['ninp'],\
+        params['nhead'],\
+        params['nhid'],\
+        params['dropout_rdecoder'],\
+        embedding).to(device)
 
     optimizer = torch.optim.Adam([encoder, lr=params['lr'])
 
