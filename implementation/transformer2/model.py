@@ -301,6 +301,10 @@ class SequicityModel(nn.Module):
         Encode input, decoder bspan, decode response 
 
         Args:
+            user_input: input to encoder, should contain concatenated bspan (if exists)
+            bdecoder_input: input to bspan decoder
+            rdecoder_input: response
+            degree: KB result
 
         Returns:
 
@@ -454,11 +458,8 @@ def main_function():
         prev_bspan = None  # bspan from previous turn
         for turn in batch:
             print(turn.keys())
-            # encoder_input, encoder_input_np, bdec_input, rdec_input, rdec_input_np, encoder_len, \
-            # response_len, degree_input, kw_ret = reader._convert_batch(d, r, prev_bspan)
+            # TODO convert input to Tensors
             raise NotImplementedError()
-
-            # TODO implement training
 
             prev_bspan = turn['bspan']
 

@@ -5,6 +5,11 @@
 from config import global_config as cfg
 import reader
 import torch
+import random
+import numpy as np
+
+random.seed(1)
+np.random.seed(1)
 
 def print_dialogues(r):
     """ Prints dialogues: user_input, bspan and machine response 
@@ -44,31 +49,34 @@ def with_convert(r):
     for batch in r.mini_batch_iterator('train'):
         # print(len(batch))
         prev_z = None
+        pz = [None]*100
         for d in batch: # first is turn0, then turn1
             u_input, u_input_np, z_input, m_input, m_input_np, u_len, \
             m_len, degree_input, kw_ret \
                 = reader._convert_batch(d, r, prev_z)
-            # print(u_input)
-            # print(d['user'])
-            # return
-            for ui, zi, mi, uio, zio, mio, deg in zip(u_input, z_input, m_input, d['user'], d['bspan'], d['response'], degree_input):
-                # x = r.vocab.sentence_decode(ui)
-                # print('u_input: {}'.format(x))
+            for ui, zi, mi, uio, zio, mio, deg,p in zip(u_input, z_input, m_input, d['user'], d['bspan'], d['response'], d['degree'], pz):
+                x = r.vocab.sentence_decode(ui)
+                print('u_input: {}'.format(x))
                 x = r.vocab.sentence_decode(uio)
                 print('u_origi: {}'.format(x))
-                # x = r.vocab.sentence_decode(zi)
-                # print('z_input: {}'.format(x))
+                x = r.vocab.sentence_decode(zi)
+                print('z_input: {}'.format(x))
                 x = r.vocab.sentence_decode(zio)
                 print('z_origi: {}'.format(x))
-                # x = r.vocab.sentence_decode(mi)
-                # print('m_input: {}'.format(x))
+                x = r.vocab.sentence_decode(mi)
+                print('m_input: {}'.format(x))
                 x = r.vocab.sentence_decode(mio)
                 print('m_origi: {}'.format(x))
                 print('degree: {}'.format(deg))
+                if prev_z:
+                    x = r.vocab.sentence_decode(p)
+                    print('prev_z: {}'.format(x))
+
 
                 print('------------')
             print('#'*50)
             prev_z = d['bspan']
+            pz = prev_z
 
         # print(d.keys())
         print('\n')
@@ -103,6 +111,7 @@ def first_zero_index(tensor, dim=-1):
 
 def basic(r):
     for batch in r.mini_batch_iterator('train'):
+        return
         for d in batch: # first is turn0, then turn1
             print(len(d['user']))
             # print(d.keys())
@@ -115,9 +124,10 @@ if __name__=='__main__':
     cfg.init_handler('tsdf-camrest')
     cfg.dataset = 'camrest'
     r = reader.CamRest676Reader()
-    basic(r)
+
+    with_convert(r)
+    # basic(r)
     # max_len(r)
-    # # with_convert(r)
     # ten = torch.zeros(5, 6)
     # ten[:,:2] = torch.rand(5, 2)
     # ten[1,2] = 1.243
