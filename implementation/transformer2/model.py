@@ -234,7 +234,7 @@ class ResponseDecoder(nn.Module):
 
 
 class SequicityModel(nn.Module):
-    def __init__(self, encoder, bdecoder, rdecoder):
+    def __init__(self, encoder, bdecoder, rdecoder, params, reader):
         super().__init__()
         self.model_type = 'Transformer'
 
@@ -412,6 +412,7 @@ def main_function():
     embedding = init_embedding(embedding, r)
 
 
+    # def __init__(self, ntoken, ninp, nhead, nhid, nlayers, reader, params, dropout=0.5, embedding=None):
     encoder = Encoder(
         params['ntoken'],\
         params['ninp'],\
@@ -431,28 +432,31 @@ def main_function():
         params,\
         params['dropout_bdecoder'],\
         embedding).to(device)
-    response_decoder = BSpanDecoder(
+    response_decoder = ResponseDecoder(
         params['ntoken'],\
         params['ninp'],\
         params['nhead'],\
         params['nhid'],\
         params['nlayers'],\
+        r,\
         params,\
         params['dropout_rdecoder'],\
         embedding).to(device)
 
-    model = SequicityModel(encoder, bspan_decoder, response_decoder)
+    model = SequicityModel(encoder, bspan_decoder, response_decoder, params, reader)
 
     # TODO fix this
-    optimizer = torch.optim.Adam(encoder, lr=params['lr'])
+    optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
 
     iterator = r.mini_batch_iterator('train') # bucketed by turn_num
     # TODO what about different batch sizes
     for batch in iterator:
         prev_bspan = None  # bspan from previous turn
         for turn in batch:
-            encoder_input, encoder_input_np, bdec_input, rdec_input, rdec_input_np, encoder_len, \
-            response_len, degree_input, kw_ret = reader._convert_batch(d, r, prev_bspan)
+            print(turn.keys())
+            # encoder_input, encoder_input_np, bdec_input, rdec_input, rdec_input_np, encoder_len, \
+            # response_len, degree_input, kw_ret = reader._convert_batch(d, r, prev_bspan)
+            raise NotImplementedError()
 
             # TODO implement training
 

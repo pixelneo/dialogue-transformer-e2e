@@ -100,6 +100,14 @@ def first_zero_index(tensor, dim=-1):
     mask = tensor == 0
     _, ind = torch.min(mask, dim=1)
 
+
+def basic(r):
+    for batch in r.mini_batch_iterator('train'):
+        for d in batch: # first is turn0, then turn1
+            print(len(d['user']))
+            # print(d.keys())
+
+
 if __name__=='__main__':
     # cfg.init_handler('tsdf-kvret')
     # cfg.dataset = 'kvret'
@@ -107,6 +115,7 @@ if __name__=='__main__':
     cfg.init_handler('tsdf-camrest')
     cfg.dataset = 'camrest'
     r = reader.CamRest676Reader()
+    basic(r)
     # max_len(r)
     # # with_convert(r)
     # ten = torch.zeros(5, 6)
@@ -119,5 +128,5 @@ if __name__=='__main__':
     # # ten = ten[:,:].nonzero()
     # print(ten.split(2))
 
-    print(test_subq(6))
+    # print(test_subq(6))
 
