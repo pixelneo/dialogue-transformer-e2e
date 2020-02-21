@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from config import global_config as cfg
+import reader
 
 
 # TODO:
@@ -63,11 +64,11 @@ class Encoder(nn.Module):
         self.ninp = ninp
         self.params = params
 
-        self.init_weights()
+        # self.init_weights()
 
-    def init_weights(self):
-        initrange = 0.1
-        self.transformer_encoder.weight.data.uniform_(-initrange, initrange)
+    # def init_weights(self):
+        # initrange = 0.1
+        # self.embedding.weight.data.uniform_(-initrange, initrange)
 
     def train(self, t):
         self.transformer_encoder.train(t)
@@ -97,7 +98,7 @@ class BSpanDecoder(nn.Module):
         self.src_mask = None
         self.pos_encoder = PositionalEncoding(ninp, dropout)
         decoder_layers = TransformerDecoderLayer(ninp, nhead, nhid, dropout)
-        self.transformer_decoder = TransformerDecoder(encoder_layers, nlayers)
+        self.transformer_decoder = TransformerDecoder(decoder_layers, nlayers)
         self.embedding = nn.Embedding(ntoken, ninp) if embedding is None else embedding
         self.ninp = ninp
         self.linear = nn.Linear(ninp, ntoken)
@@ -108,7 +109,7 @@ class BSpanDecoder(nn.Module):
 
     def init_weights(self):
         initrange = 0.1
-        self.transformer_decoder.weight.data.uniform_(-initrange, initrange)
+        # self.embedding.weight.data.uniform_(-initrange, initrange)
         self.linear.bias.data.zero_()
         self.linear.weight.data.uniform_(-initrange, initrange)
 
@@ -163,7 +164,7 @@ class ResponseDecoder(nn.Module):
         self.src_mask = None
         self.pos_encoder = PositionalEncoding(ninp, dropout)
         decoder_layers = TransformerDecoderLayer(ninp, nhead, nhid, dropout)
-        self.transformer_decoder = TransformerDecoder(encoder_layers, nlayers)
+        self.transformer_decoder = TransformerDecoder(decoder_layers, nlayers)
         self.embedding = nn.Embedding(ntoken, ninp) if embedding is None else embedding
         self.ninp = ninp
         self.linear = nn.Linear(ninp, ntoken)
@@ -174,7 +175,7 @@ class ResponseDecoder(nn.Module):
 
     def init_weights(self):
         initrange = 0.1
-        self.transformer_decoder.weight.data.uniform_(-initrange, initrange)
+        # self.embedding.weight.data.uniform_(-initrange, initrange)
         self.linear.bias.data.zero_()
         self.linear.weight.data.uniform_(-initrange, initrange)
 
@@ -232,25 +233,14 @@ class ResponseDecoder(nn.Module):
         return output
 
 
-def SequicityModel(nn.Module):
-    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, reader, params, dropout=0.5):
-        """
-        Args:
-            ntoken: vocab size
-            ninp: embedding dimension
-            nhead: number of heads
-            nhid: hidden layer size
-            nlayers: number of layers
-            reader: instance of `Reader`
-            dropout: dropout rate
-        """
+class SequicityModel(nn.Module):
+    def __init__(self, encoder, bdecoder, rdecoder):
         super().__init__()
         self.model_type = 'Transformer'
-        self.embedding = nn.Embedding(ntoken, ninp)
 
-        self.encoder = Encoder(ntoken, ninp, nhead, nhid, dropout, params)
-        self.bspan_decoder = BSpanDecoder(ntoken, ninp, nhead, nhid, reader, params, dropout, embedding)
-        self.response_decoder = BSpanDecoder(ntoken, ninp, nhead, nhid, reader, params, dropout, embedding)
+        self.encoder = encoder
+        self.bspan_decoder = bdecoder
+        self.response_decoder = rdecoder
 
         self.reader = reader
         self.params = params
@@ -322,7 +312,7 @@ def SequicityModel(nn.Module):
 
         encoded = self.encoder(user_input)
 
-        if self.training
+        if self.training:
             bdecoder_input = bdecoder_input
         else:
             bdecoder_input = torch.zeros(cfg.max_ts-1, bdecoder_input.size(1)) # go token is added later, in BSpanDecoder (seq_len, batch)
@@ -353,6 +343,8 @@ def SequicityModel(nn.Module):
                                        bspan_decoded, \
                                        degree)
 
+        # TODO return outputs, loss?
+
 
 
 def remove_padding(tensor, dim=-1):
@@ -381,12 +373,12 @@ def remove_padding(tensor, dim=-1):
 def init_embedding_model(model, r):
     """ Set glove embeddings for model, r is a reader instance """
     initial_arr = model.embedding.weight.data.cpu().numpy()
-    embedding_arr = torch.from_numpy(get_glove_matrix(r.vocab, initial_arr))
+    embedding_arr = torch.from_numpy(reader.get_glove_matrix(r.vocab, initial_arr))
     model.embedding.weight.data.copy_(embedding_arr)
 
 def init_embedding(embedding, r):
     initial_arr = embedding.weight.data.cpu().numpy()
-    embedding_arr = torch.from_numpy(get_glove_matrix(r.vocab, initial_arr))
+    embedding_arr = torch.from_numpy(reader.get_glove_matrix(r.vocab, initial_arr))
     embedding.weight.data.copy_(embedding_arr)
     return embedding
 
@@ -419,11 +411,14 @@ def main_function():
     embedding = nn.Embedding(params['ntoken'], params['ninp'])
     embedding = init_embedding(embedding, r)
 
+
     encoder = Encoder(
         params['ntoken'],\
         params['ninp'],\
         params['nhead'],\
         params['nhid'],\
+        params['nlayers'],\
+        params,\
         params['dropout_encoder'],\
         embedding).to(device)
     bspan_decoder = BSpanDecoder(
@@ -431,6 +426,9 @@ def main_function():
         params['ninp'],\
         params['nhead'],\
         params['nhid'] - params['bspan_size'] - 1,\
+        params['nlayers'],\
+        r,\
+        params,\
         params['dropout_bdecoder'],\
         embedding).to(device)
     response_decoder = BSpanDecoder(
@@ -438,10 +436,15 @@ def main_function():
         params['ninp'],\
         params['nhead'],\
         params['nhid'],\
+        params['nlayers'],\
+        params,\
         params['dropout_rdecoder'],\
         embedding).to(device)
 
-    optimizer = torch.optim.Adam([encoder, lr=params['lr'])
+    model = SequicityModel(encoder, bspan_decoder, response_decoder)
+
+    # TODO fix this
+    optimizer = torch.optim.Adam(encoder, lr=params['lr'])
 
     iterator = r.mini_batch_iterator('train') # bucketed by turn_num
     # TODO what about different batch sizes
