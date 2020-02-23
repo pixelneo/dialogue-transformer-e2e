@@ -70,7 +70,7 @@ class Encoder(nn.Module):
         # initrange = 0.1
         # self.embedding.weight.data.uniform_(-initrange, initrange)
 
-    def train(self, t):
+    def train(self, t=True):
         self.transformer_encoder.train(t)
 
     def forward(self, src):
@@ -113,7 +113,7 @@ class BSpanDecoder(nn.Module):
         self.linear.bias.data.zero_()
         self.linear.weight.data.uniform_(-initrange, initrange)
 
-    def train(self, t):
+    def train(self, t=True):
         self.transformer_decoder.train(t)
 
     def _generate_square_subsequent_mask(self, sz):
@@ -179,7 +179,7 @@ class ResponseDecoder(nn.Module):
         self.linear.bias.data.zero_()
         self.linear.weight.data.uniform_(-initrange, initrange)
 
-    def train(self, t):
+    def train(self, t=True):
         self.transformer_decoder.train(t)
 
     def _generate_square_subsequent_mask(self, sz):
@@ -245,7 +245,7 @@ class SequicityModel(nn.Module):
         self.reader = reader
         self.params = params
 
-    def train(self, t):
+    def train(self, t=True):
         super().train(t)
         self.encoder.train(t)
         self.bspan_decoder.train(t)
@@ -347,7 +347,8 @@ class SequicityModel(nn.Module):
                                        bspan_decoded, \
                                        degree)
 
-        # TODO return outputs, loss?
+        # TODO return only response or bspan also
+        return response
 
 
 
@@ -389,15 +390,23 @@ def init_embedding(embedding, r):
 def convert_batch(batch, params):
     # convert batch to tensors
     # dict_keys(['dial_id', 'turn_num', 'user', 'response', 'bspan', 'u_len', 'm_len', 'degree', 'supervised'])
+
+    # TODO dims are wrong
     user = torch.zeros((cfg.max_ts,len(batch)))
     bspan = torch.zeros((params['bspan_size'],len(batch)))
     response = torch.zeros((cfg.max_ts,len(batch)))
     degree = torch.zeros((5, len(batch)))
     for i, turn in enumerate(batch):
-        user[:turn['u_len'], i] = torch.tensor(turn['user'])
-        bspan[:len(turn['bspan']), i] = torch.tensor(turn['bspan'])
-        response[:turn['m_len'], i] = torch.tensor(turn['response'])
-        degree[:5,i] = torch.tensor(turn['degree'])
+        try:
+            user[:len(turn['user']), i] = torch.tensor(turn['user'])
+            bspan[:len(turn['bspan']), i] = torch.tensor(turn['bspan'])
+            response[:len(turn['response']), i] = torch.tensor(turn['response'])
+            degree[:5,i] = torch.tensor(turn['degree'])
+        except Exception as e:
+            print(user[:,i])
+            print(turn['user'])
+
+            raise e
 
     return user, bspan, response, degree
 
@@ -474,19 +483,23 @@ def main_function():
     iterator = r.mini_batch_iterator('train') # bucketed by turn_num
     for batch in iterator:
         prev_bspan = None  # bspan from previous turn
-        user, bspan, response, degree = convert_batch(batch)
+        user, bspan, response, degree = convert_batch(batch, params)
 
         optimizer.zero_grad()
-        user = model(user, bspan, response, degree)
+        out = model(user, bspan, response, degree)
         # loss = 
+        # we want the loss to consider both BSpanDecoder outputs and ResponseDecoder outputs
+        # CrossEntropy loss takes (N, C) and (N) 
+        # TODO what about OOV? like name_SLOT
+        loss = criterion(out.view(-1, params['ntoken']), response.view(-1))
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
 
-        raise NotImplementedError('train')
+        # # TODO get prev bspan
+        # prev_bspan = turn['bspan']
+        print(loss)
 
-        # TODO get prev bspan
-        prev_bspan = turn['bspan']
 
 
 
