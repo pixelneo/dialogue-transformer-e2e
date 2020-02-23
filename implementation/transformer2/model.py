@@ -386,6 +386,22 @@ def init_embedding(embedding, r):
     embedding.weight.data.copy_(embedding_arr)
     return embedding
 
+def convert_batch(batch, params):
+    # convert batch to tensors
+    # dict_keys(['dial_id', 'turn_num', 'user', 'response', 'bspan', 'u_len', 'm_len', 'degree', 'supervised'])
+    user = torch.zeros((cfg.max_ts,len(batch)))
+    bspan = torch.zeros((params['bspan_size'],len(batch)))
+    response = torch.zeros((cfg.max_ts,len(batch)))
+    degree = torch.zeros((5, len(batch)))
+    for i, turn in enumerate(batch):
+        user[:turn['u_len'], i] = torch.tensor(turn['user'])
+        bspan[:len(turn['bspan']), i] = torch.tensor(turn['bspan'])
+        response[:turn['m_len'], i] = torch.tensor(turn['response'])
+        degree[:5,i] = torch.tensor(turn['degree'])
+
+    return user, bspan, response, degree
+
+
 def get_params():
     # TODO: make parameter handling great again!
     # it would be better to use json or yaml (or something else) for setting parameters
@@ -449,19 +465,28 @@ def main_function():
 
     model = SequicityModel(encoder, bspan_decoder, response_decoder, params, reader)
 
-    # TODO fix this
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
+    criterion = nn.CrossEntropyLoss()
+    # TODO scheduler
+
+    model.train()
 
     iterator = r.mini_batch_iterator('train') # bucketed by turn_num
-    # TODO what about different batch sizes
     for batch in iterator:
         prev_bspan = None  # bspan from previous turn
-        for turn in batch:
-            print(turn.keys())
-            # TODO convert input to Tensors
-            raise NotImplementedError()
+        user, bspan, response, degree = convert_batch(batch)
 
-            prev_bspan = turn['bspan']
+        optimizer.zero_grad()
+        user = model(user, bspan, response, degree)
+        # loss = 
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        optimizer.step()
+
+        raise NotImplementedError('train')
+
+        # TODO get prev bspan
+        prev_bspan = turn['bspan']
 
 
 
