@@ -389,26 +389,29 @@ def init_embedding(embedding, r):
 
 def convert_batch(batch, params):
     # convert batch to tensors
+    # yield tensors with batched inputs
     # dict_keys(['dial_id', 'turn_num', 'user', 'response', 'bspan', 'u_len', 'm_len', 'degree', 'supervised'])
 
-    # TODO dims are wrong
-    user = torch.zeros((cfg.max_ts,len(batch)))
-    bspan = torch.zeros((params['bspan_size'],len(batch)))
-    response = torch.zeros((cfg.max_ts,len(batch)))
-    degree = torch.zeros((5, len(batch)))
-    for i, turn in enumerate(batch):
-        try:
-            user[:len(turn['user']), i] = torch.tensor(turn['user'])
-            bspan[:len(turn['bspan']), i] = torch.tensor(turn['bspan'])
-            response[:len(turn['response']), i] = torch.tensor(turn['response'])
-            degree[:5,i] = torch.tensor(turn['degree'])
-        except Exception as e:
-            print(user[:,i])
-            print(turn['user'])
+    for turn in batch:
+        user = torch.zeros((cfg.max_ts,len(turn['user'])))
+        bspan = torch.zeros((params['bspan_size'],len(turn['bspan'])))
+        response = torch.zeros((cfg.max_ts,len(turn['response'])))
+        degree = torch.zeros((5, len(turn['degree'])))
+        for i, (u, b, r, d) in enumerate(zip(turn['user'], turn['bspan'], turn['response'], turn['degree'])):
+            try:
+                user[:len(u), i] = torch.tensor(u)
+                bspan[:len(b), i] = torch.tensor(b)
+                response[:len(r), i] = torch.tensor(r)
+                degree[:5,i] = torch.tensor(d)
+            except Exception as e:
+                print(user)
+                print(u)
+                print(i)
+                print(user.shape)
+                print(len(u))
+                raise e
 
-            raise e
-
-    return user, bspan, response, degree
+        yield user, bspan, response, degree
 
 
 def get_params():
@@ -483,22 +486,22 @@ def main_function():
     iterator = r.mini_batch_iterator('train') # bucketed by turn_num
     for batch in iterator:
         prev_bspan = None  # bspan from previous turn
-        user, bspan, response, degree = convert_batch(batch, params)
+        for user, bspan, response, degree in convert_batch(batch, params):
+            optimizer.zero_grad()
+            out = model(user, bspan, response, degree)
+            # loss = 
+            # we want the loss to consider both BSpanDecoder outputs and ResponseDecoder outputs
+            # CrossEntropy loss takes (N, C) and (N) 
+            # TODO what about OOV? like name_SLOT
+            # TODO this might be wrong, we want to train on probabilities, not labels
+            loss = criterion(out.view(-1, params['ntoken']), response.view(-1))
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+            optimizer.step()
 
-        optimizer.zero_grad()
-        out = model(user, bspan, response, degree)
-        # loss = 
-        # we want the loss to consider both BSpanDecoder outputs and ResponseDecoder outputs
-        # CrossEntropy loss takes (N, C) and (N) 
-        # TODO what about OOV? like name_SLOT
-        loss = criterion(out.view(-1, params['ntoken']), response.view(-1))
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-        optimizer.step()
-
-        # # TODO get prev bspan
-        # prev_bspan = turn['bspan']
-        print(loss)
+            # # TODO get prev bspan
+            # prev_bspan = turn['bspan']
+            print(loss)
 
 
 

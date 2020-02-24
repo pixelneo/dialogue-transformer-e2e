@@ -22,7 +22,6 @@ def print_dialogues(r):
             print('s')
             print(d['turn_num'][0])
             print(len(d['user']))
-            continue
             for dial_id, turn_num, user, bspan, response, u_len, m_len, degree in zip(d['dial_id'], d['turn_num'], \
                                                                                       d['user'], d['bspan'], d['response'], \
                                                                                       d['u_len'], d['m_len'], d['degree']):
@@ -55,16 +54,10 @@ def with_convert(r):
             m_len, degree_input, kw_ret \
                 = reader._convert_batch(d, r, prev_z)
             for ui, zi, mi, uio, zio, mio, deg,p in zip(u_input, z_input, m_input, d['user'], d['bspan'], d['response'], d['degree'], pz):
-                x = r.vocab.sentence_decode(ui)
-                print('u_input: {}'.format(x))
                 x = r.vocab.sentence_decode(uio)
                 print('u_origi: {}'.format(x))
-                x = r.vocab.sentence_decode(zi)
-                print('z_input: {}'.format(x))
                 x = r.vocab.sentence_decode(zio)
                 print('z_origi: {}'.format(x))
-                x = r.vocab.sentence_decode(mi)
-                print('m_input: {}'.format(x))
                 x = r.vocab.sentence_decode(mio)
                 print('m_origi: {}'.format(x))
                 print('degree: {}'.format(deg))
@@ -74,7 +67,7 @@ def with_convert(r):
 
 
                 print('------------')
-            print('#'*50)
+            print('###### new turn ')
             prev_z = d['bspan']
             pz = prev_z
 
