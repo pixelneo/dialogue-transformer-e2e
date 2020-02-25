@@ -74,14 +74,17 @@ class Encoder(nn.Module):
         self.transformer_encoder.train(t)
 
     def forward(self, src):
+        mask = src.eq(0).transpose(0,1)  # 0 corresponds to <pad>
         src = self.embedding(src) * self.ninp
         src = self.pos_encoder(src)
-        mask = src.eq(0)  # 0 corresponds to <pad>
+        print(src.shape)
+        print('mask')
+        print(mask.shape)
         output = self.transformer_encoder(src, src_key_padding_mask=mask)
         return output
 
 class BSpanDecoder(nn.Module):
-    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, reader, params, dropout=0.5, embedding=None):
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, reader_, params, dropout=0.5, embedding=None):
         """
         Args:
             ntoken: vocab size
@@ -102,7 +105,7 @@ class BSpanDecoder(nn.Module):
         self.embedding = nn.Embedding(ntoken, ninp) if embedding is None else embedding
         self.ninp = ninp
         self.linear = nn.Linear(ninp, ntoken)
-        self.reader = reader
+        self.reader_ = reader_
         self.params = params
 
         self.init_weights()
@@ -138,16 +141,16 @@ class BSpanDecoder(nn.Module):
         go_tokens = torch.zeros((1, tgt.size(1))) + 3  # GO_2 token has index 3
         tgt = torch.cat([go_tokens, tgt], dim=0)  # concat GO_2 token along sequence lenght axis
 
+        mask = tgt.eq(0).transpose(0,1)  # 0 corresponds to <pad>
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
-        mask = tgt.eq(0)  # 0 corresponds to <pad>
         tgt_mask = self._generate_square_subsequent_mask(tgt.size(0))
         output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=mask)
         output = self.linear(output)
         return output
 
 class ResponseDecoder(nn.Module):
-    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, reader, params, dropout=0.5, embedding=None):
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, reader_, params, dropout=0.5, embedding=None):
         """
         Args:
             ntoken: vocab size
@@ -168,7 +171,7 @@ class ResponseDecoder(nn.Module):
         self.embedding = nn.Embedding(ntoken, ninp) if embedding is None else embedding
         self.ninp = ninp
         self.linear = nn.Linear(ninp, ntoken)
-        self.reader = reader
+        self.reader_ = reader_
         self.params = params
 
         self.init_weights()
@@ -208,9 +211,9 @@ class ResponseDecoder(nn.Module):
         tgt = torch.cat([degree_reshaped, bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence length axis
         # TODO pad `tgt` but also think of `degree` which is added later
 
+        mask = tgt.eq(0).transpose(0,1)  # 0 corresponds to <pad>
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
-        mask = tgt.eq(0)  # 0 corresponds to <pad>
 
         # (solved) TODO Bspan Size (can be different for every turn in batch?)
         #       solution: bspan will have always the same size (params.bspan_size), padded with <pad2> (5) symbol
@@ -234,7 +237,7 @@ class ResponseDecoder(nn.Module):
 
 
 class SequicityModel(nn.Module):
-    def __init__(self, encoder, bdecoder, rdecoder, params, reader):
+    def __init__(self, encoder, bdecoder, rdecoder, params, reader_):
         super().__init__()
         self.model_type = 'Transformer'
 
@@ -242,7 +245,7 @@ class SequicityModel(nn.Module):
         self.bspan_decoder = bdecoder
         self.response_decoder = rdecoder
 
-        self.reader = reader
+        self.reader_ = reader_
         self.params = params
 
     def train(self, t=True):
@@ -270,7 +273,7 @@ class SequicityModel(nn.Module):
         input_ = initial_decoder_input  # shape (seq_len, batch)?
         pad_id = 0 if response else 4  # 4 is index for <pad2>
         decoded_sentences = torch.zeros_like(input_) * pad_id
-        mask = ones_like(input_.size(1)).bool()  # shape: batch
+        mask = torch.ones_like(input_.size(1)).bool()  # shape: batch
         for t in range(max_ts):
             if response:  # response decoder
                 out = decoder(input_, encoder_output, bspan, degree)
@@ -310,9 +313,9 @@ class SequicityModel(nn.Module):
 
         """
         # transpose input to (seq_len, batch)
-        user_input = user_input.transpose(0,1)
-        bdecoder_input = bdecoder_input.transpose(0,1)
-        rdecoder_input = rdecoder_input.transpose(0,1)
+        # user_input = user_input.transpose(0,1)
+        # bdecoder_input = bdecoder_input.transpose(0,1)
+        # rdecoder_input = rdecoder_input.transpose(0,1)
 
         encoded = self.encoder(user_input)
 
@@ -326,7 +329,7 @@ class SequicityModel(nn.Module):
                                    self.bspan_decoder, \
                                    encoded, \
                                    bdecoder_input, \
-                                   self.reader.vocab.encode('EOS_Z2'),\
+                                   self.reader_.vocab.encode('EOS_Z2'),\
                                    self.params['bspan_size'])
 
 
@@ -341,7 +344,7 @@ class SequicityModel(nn.Module):
                                        self.response_decoder, \
                                        encoded, \
                                        rdecoder_input, \
-                                       self.reader.vocab.encode('EOS_M'),\
+                                       self.reader_.vocab.encode('EOS_M'),\
                                        cfg.max_ts, \
                                        True, \
                                        bspan_decoded, \
@@ -393,16 +396,16 @@ def convert_batch(batch, params):
     # dict_keys(['dial_id', 'turn_num', 'user', 'response', 'bspan', 'u_len', 'm_len', 'degree', 'supervised'])
 
     for turn in batch:
-        user = torch.zeros((cfg.max_ts,len(turn['user'])))
-        bspan = torch.zeros((params['bspan_size'],len(turn['bspan'])))
-        response = torch.zeros((cfg.max_ts,len(turn['response'])))
-        degree = torch.zeros((5, len(turn['degree'])))
+        user = torch.zeros(cfg.max_ts,len(turn['user']), dtype=torch.long)
+        bspan = torch.zeros(params['bspan_size'],len(turn['bspan']), dtype=torch.long)
+        response = torch.zeros(cfg.max_ts,len(turn['response']), dtype=torch.long)
+        degree = torch.zeros(5, len(turn['degree']), dtype=torch.long)
         for i, (u, b, r, d) in enumerate(zip(turn['user'], turn['bspan'], turn['response'], turn['degree'])):
             try:
-                user[:len(u), i] = torch.tensor(u)
-                bspan[:len(b), i] = torch.tensor(b)
-                response[:len(r), i] = torch.tensor(r)
-                degree[:5,i] = torch.tensor(d)
+                user[:len(u), i] = torch.tensor(u, dtype=torch.long)
+                bspan[:len(b), i] = torch.tensor(b, dtype=torch.long)
+                response[:len(r), i] = torch.tensor(r, dtype=torch.long)
+                degree[:5,i] = torch.tensor(d, dtype=torch.long)
             except Exception as e:
                 print(user)
                 print(u)
@@ -410,6 +413,7 @@ def convert_batch(batch, params):
                 print(user.shape)
                 print(len(u))
                 raise e
+        print(user.shape)
 
         yield user, bspan, response, degree
 
@@ -475,7 +479,7 @@ def main_function():
         params['dropout_rdecoder'],\
         embedding).to(device)
 
-    model = SequicityModel(encoder, bspan_decoder, response_decoder, params, reader)
+    model = SequicityModel(encoder, bspan_decoder, response_decoder, params, r)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
     criterion = nn.CrossEntropyLoss()
