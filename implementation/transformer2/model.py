@@ -77,9 +77,6 @@ class Encoder(nn.Module):
         mask = src.eq(0).transpose(0,1)  # 0 corresponds to <pad>
         src = self.embedding(src) * self.ninp
         src = self.pos_encoder(src)
-        print(src.shape)
-        print('mask')
-        print(mask.shape)
         output = self.transformer_encoder(src, src_key_padding_mask=mask)
         return output
 
@@ -138,7 +135,8 @@ class BSpanDecoder(nn.Module):
             output from linear layer, (vocab size), pre softmax
 
         """
-        go_tokens = torch.zeros((1, tgt.size(1))) + 3  # GO_2 token has index 3
+        go_tokens = torch.zeros((1, tgt.size(1)), dtype=torch.int64) + 3  # GO_2 token has index 3
+
         tgt = torch.cat([go_tokens, tgt], dim=0)  # concat GO_2 token along sequence lenght axis
 
         mask = tgt.eq(0).transpose(0,1)  # 0 corresponds to <pad>
@@ -205,10 +203,14 @@ class ResponseDecoder(nn.Module):
 
         """
 
-        go_tokens = torch.ones((1, tgt.size(1)))  # GO token has index 1
-        degree_reshaped = torch.zeros(1, tgt.size(1), cfg.embedding_size)
+        go_tokens = torch.ones((1, tgt.size(1)), dtype=torch.int64)  # GO token has index 1
+        degree_reshaped = torch.zeros((1, tgt.size(1), cfg.embedding_size), dtype=torch.float32)
+        # print(degree_reshaped.shape)
+        # print(bspan.shape)
+        # print(go_tokens.shape)
+        # print(tgt.shape)
 
-        tgt = torch.cat([degree_reshaped, bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence length axis
+        tgt = torch.cat([bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence length axis
         # TODO pad `tgt` but also think of `degree` which is added later
 
         mask = tgt.eq(0).transpose(0,1)  # 0 corresponds to <pad>
@@ -273,7 +275,7 @@ class SequicityModel(nn.Module):
         input_ = initial_decoder_input  # shape (seq_len, batch)?
         pad_id = 0 if response else 4  # 4 is index for <pad2>
         decoded_sentences = torch.zeros_like(input_) * pad_id
-        mask = torch.ones_like(input_.size(1)).bool()  # shape: batch
+        mask = torch.ones(input_.size(1)).bool()  # shape: batch
         for t in range(max_ts):
             if response:  # response decoder
                 out = decoder(input_, encoder_output, bspan, degree)
@@ -282,13 +284,14 @@ class SequicityModel(nn.Module):
 
             # probs = nn.Softmax(out, dim=-1)  # may not be true: shape: (seq_len, batch, probs)
 
-            probs = nn.Softmax(out[t,:,:], dim=-1)  # get prob for only t timestep (1,batch,probs)?
+            probs = nn.functional.softmax(out[t,:,:], dim=-1)  # get prob for only t timestep (1,batch,probs)?
             _, inds = torch.topk(probs, 1)  # greedy decode (1, batch, 1)
 
             inds.squeeze_(-1)  # (1, batch, 1) -> (1, batch)
             inds.squeeze_(0)  # (batch)
 
-            decoded_sentences[t,:] = torch.masked_scatter(mask, inds)  # set decoded word at time step t for the whole batch
+            # TODO solve this
+            decoded_sentences[t,:].masked_scatter_(mask, inds)  # set decoded word at time step t for the whole batch
             input_[t, :] = inds
 
             # set mask if EOS is reached
@@ -337,7 +340,7 @@ class SequicityModel(nn.Module):
             # during training we will do only one pass through decoder and train on 
             # probabilities, outputs of softmax instead of one-hot decoded words.
             # TODO should we use decoded bspan or the supplied one? if supplied, we have to train BSpanDecoder somehow.
-            response = self.response_decoder(concat, encoded, bspan, degree)
+            response = self.response_decoder(rdecoder_input, encoded, bdecoder_input, degree)
         else:
             #response = self.response_decoder(concat, encoded, bspan_decoded, degree)
             response = self._greedy_decode_output(\
@@ -401,19 +404,10 @@ def convert_batch(batch, params):
         response = torch.zeros(cfg.max_ts,len(turn['response']), dtype=torch.long)
         degree = torch.zeros(5, len(turn['degree']), dtype=torch.long)
         for i, (u, b, r, d) in enumerate(zip(turn['user'], turn['bspan'], turn['response'], turn['degree'])):
-            try:
-                user[:len(u), i] = torch.tensor(u, dtype=torch.long)
-                bspan[:len(b), i] = torch.tensor(b, dtype=torch.long)
-                response[:len(r), i] = torch.tensor(r, dtype=torch.long)
-                degree[:5,i] = torch.tensor(d, dtype=torch.long)
-            except Exception as e:
-                print(user)
-                print(u)
-                print(i)
-                print(user.shape)
-                print(len(u))
-                raise e
-        print(user.shape)
+            user[:len(u), i] = torch.tensor(u, dtype=torch.long)
+            bspan[:len(b), i] = torch.tensor(b, dtype=torch.long)
+            response[:len(r), i] = torch.tensor(r, dtype=torch.long)
+            degree[:5,i] = torch.tensor(d, dtype=torch.long)
 
         yield user, bspan, response, degree
 
