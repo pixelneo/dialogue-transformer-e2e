@@ -183,7 +183,7 @@ class ResponseDecoder(nn.Module):
     def train(self, t=True):
         self.transformer_decoder.train(t)
 
-    def _generate_square_subsequent_mask(self, sz):
+    def _generate_square_subsequent_mask(self, sz, bspan_size):
         # we do not mask the first positions (1 for degree, 1 for <go> token and 'some' for bspan)
         bspan_size = self.params['bspan_size']
         mask = (torch.triu(torch.ones(sz+1+bspan_size, sz+1+bspan_size), diagonal=-(bspan_size+1)) == 1).transpose(0, 1)
@@ -208,19 +208,18 @@ class ResponseDecoder(nn.Module):
         # print(degree_reshaped.shape)
         # print(bspan.shape)
         # print(go_tokens.shape)
-        # print(tgt.shape)
+        print(tgt.shape)
 
         tgt = torch.cat([bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence length axis
         # TODO pad `tgt` but also think of `degree` which is added later
 
         mask = tgt.eq(0).transpose(0,1)  # 0 corresponds to <pad>
+        # TODO dimension are wrong
+        # TODO also, final tgt dimension should be cfg.max_ts (128). however, now it is 128 before bspan is concatednated with it
+        # mask = torch.cat([torch.ones((mask.size(0), 1)).bool(), mask])
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
 
-        # (solved) TODO Bspan Size (can be different for every turn in batch?)
-        #       solution: bspan will have always the same size (params.bspan_size), padded with <pad2> (5) symbol
-        # (solved, see prev.) TODO (HIGH PRIORITY) how to solve this, when there is one padding mask for a batch?
-        #    we do not mask bspan, degree and go token.
         #    eg. [cheap restaurant EOS_Z1 EOS_Z2 PAD2 .... PAD2 01000 GO1 mask mask mask ..... ]
         #    ... [            ...          bspan    ... padding degree go     ....     masking ]
 
@@ -230,7 +229,7 @@ class ResponseDecoder(nn.Module):
         tgt_mask = self._generate_square_subsequent_mask(tgt.size(0), bspan_size)
 
         # tgt.size(1) is batch size (I know, why dim=1, but nn.Transformer wants it that way)
-        degree_reshaped[:, :, :cfg.degree_size] = degree  # add 1 more timestep (the first one as one-hot degree)
+        degree_reshaped[0, :, :cfg.degree_size] = degree.transpose(0,1)  # add 1 more timestep (the first one as one-hot degree)
         tgt = torch.cat([degree_reshaped, tgt], dim=0)  # concat along sequence lenght axis
 
         output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=mask)
@@ -290,7 +289,6 @@ class SequicityModel(nn.Module):
             inds.squeeze_(-1)  # (1, batch, 1) -> (1, batch)
             inds.squeeze_(0)  # (batch)
 
-            # TODO solve this
             decoded_sentences[t,:].masked_scatter_(mask, inds)  # set decoded word at time step t for the whole batch
             input_[t, :] = inds
 
@@ -353,7 +351,7 @@ class SequicityModel(nn.Module):
                                        bspan_decoded, \
                                        degree)
 
-        # TODO return only response or bspan also
+        # TODO return only response or bspan also?
         return response
 
 
@@ -505,4 +503,7 @@ def main_function():
 
 
 if __name__=='__main__':
+    import random
+    random.seed(1)
+    torch.random.manual_seed(1)
     main_function()
