@@ -232,6 +232,8 @@ class ResponseDecoder(nn.Module):
         print(mask.shape)
         print(tgt_mask.shape)
         print(memory.shape)
+        # THE ERROR: src_len is 150 and key_padding_mask.size(1) is 149
+        # BOTH are wrong and should be 128 (currently max_len)
         output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=mask)
         output = self.linear(output)
         return output
