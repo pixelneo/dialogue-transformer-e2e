@@ -205,10 +205,6 @@ class ResponseDecoder(nn.Module):
 
         go_tokens = torch.ones((1, tgt.size(1)), dtype=torch.int64)  # GO token has index 1
         degree_reshaped = torch.zeros((1, tgt.size(1), cfg.embedding_size), dtype=torch.float32)
-        # print(degree_reshaped.shape)
-        # print(bspan.shape)
-        # print(go_tokens.shape)
-        print(tgt.shape)
 
         tgt = torch.cat([bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence length axis
         # TODO pad `tgt` but also think of `degree` which is added later
@@ -232,6 +228,10 @@ class ResponseDecoder(nn.Module):
         degree_reshaped[0, :, :cfg.degree_size] = degree.transpose(0,1)  # add 1 more timestep (the first one as one-hot degree)
         tgt = torch.cat([degree_reshaped, tgt], dim=0)  # concat along sequence lenght axis
 
+        print(tgt.shape)
+        print(mask.shape)
+        print(tgt_mask.shape)
+        print(memory.shape)
         output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=mask)
         output = self.linear(output)
         return output
