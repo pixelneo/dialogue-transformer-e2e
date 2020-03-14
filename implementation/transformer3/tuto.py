@@ -43,7 +43,7 @@ dropout = 0.2 # the dropout value
 #                 num_decoder_layers=6, dim_feedforward=2048, dropout=0.1,
 #                 activation="relu", custom_encoder=None, custom_decoder=None)
 #model = TransformerModel(ntokens, emsize, nhead, nhid, nlayers, dropout).to(device)
-model = Transformer(emsize, nhead, nlayers, nlayers, nhid, dropout, vocab_size=ntokens)
+model = Transformer(emsize, nhead, nlayers, nlayers, nhid, dropout, vocab_size=ntokens).to(device)
 criterion = nn.CrossEntropyLoss()
 lr = 5.0 # learning rate
 optimizer = torch.optim.SGD(model.parameters(), lr=lr)
@@ -86,7 +86,7 @@ def evaluate(eval_model, data_source):
     with torch.no_grad():
         for i in range(0, data_source.size(0) - 1, bptt):
             data, targets = get_batch(data_source, i)
-            output = eval_model(data)
+            output = eval_model(data, torch.zeros_like(data))
             output_flat = output.view(-1, ntokens)
             total_loss += len(data) * criterion(output_flat, targets).item()
     return total_loss / (len(data_source) - 1)
