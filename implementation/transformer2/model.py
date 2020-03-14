@@ -476,30 +476,30 @@ def main_function():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
     criterion = nn.CrossEntropyLoss()
-    # TODO scheduler
 
     model.train()
 
     iterator = r.mini_batch_iterator('train') # bucketed by turn_num
-    for batch in iterator:
-        prev_bspan = None  # bspan from previous turn
-        for user, bspan, response_, degree in convert_batch(batch, params):
-            optimizer.zero_grad()
-            out = model(user, bspan, response_, degree)
-            # loss = 
-            # we want the loss to consider both BSpanDecoder outputs and ResponseDecoder outputs
-            # CrossEntropy loss takes (N, C) and (N) 
-            # TODO what about OOV? like name_SLOT
-            # TODO this might be wrong, we want to train on probabilities, not labels
-            r2 = torch.cat([response_, torch.zeros((22, out.size(1)), dtype=torch.int64)])
-            loss = criterion(out.view(-1, params['ntoken']), r2.view(-1))
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-            optimizer.step()
+    for epoch in range(cfg.epoch_num):
+        for batch in iterator:
+            prev_bspan = None  # bspan from previous turn
+            for user, bspan, response_, degree in convert_batch(batch, params):
+                optimizer.zero_grad()
+                out = model(user, bspan, response_, degree)
+                # loss = 
+                # we want the loss to consider both BSpanDecoder outputs and ResponseDecoder outputs
+                # CrossEntropy loss takes (N, C) and (N) 
+                # TODO what about OOV? like name_SLOT
+                # TODO this might be wrong, we want to train on probabilities, not labels
+                r2 = torch.cat([response_, torch.zeros((22, out.size(1)), dtype=torch.int64)])
+                loss = criterion(out.view(-1, params['ntoken']), r2.view(-1))
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+                optimizer.step()
 
-            # # TODO get prev bspan
-            # prev_bspan = turn['bspan']
-            print(loss)
+                print(loss)
+        # TODO evaluate!!!
+        # TODO save model
 
 
 

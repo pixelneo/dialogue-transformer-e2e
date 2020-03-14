@@ -42,7 +42,7 @@ class _Config:
         self.degree_size = 5
         self.layer_num = 1
         self.dropout_rate = 0.5
-        self.epoch_num = 100 # triggered by early stop
+        self.epoch_num = 20 # triggered by early stop
         self.rl_epoch_num = 1
         self.cuda = False
         self.spv_proportion = 100
@@ -81,7 +81,7 @@ class _Config:
         self.z_length = 8
         self.layer_num = 1
         self.dropout_rate = 0.5
-        self.epoch_num = 100
+        self.epoch_num = 20
         self.rl_epoch_num = 2
         self.cuda = False
         self.spv_proportion = 100
