@@ -186,7 +186,7 @@ class ResponseDecoder(nn.Module):
     def _generate_square_subsequent_mask(self, sz, bspan_size):
         # we do not mask the first positions (1 for degree, 1 for <go> token and 'some' for bspan)
         bspan_size = self.params['bspan_size']
-        mask = (torch.triu(torch.ones(sz+1+bspan_size, sz+1+bspan_size), diagonal=-(bspan_size+1)) == 1).transpose(0, 1)
+        mask = (torch.triu(torch.ones(sz+1, sz+1), diagonal=-(bspan_size+1)) == 1).transpose(0, 1)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
@@ -209,7 +209,7 @@ class ResponseDecoder(nn.Module):
         tgt = torch.cat([bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence length axis
         # TODO pad `tgt` but also think of `degree` which is added later
 
-        mask = tgt.eq(0).transpose(0,1)  # 0 corresponds to <pad>
+        mask = torch.cat([torch.ones((1, tgt.size(1)), dtype=torch.int64), tgt]).eq(0).transpose(0,1)  # 0 corresponds to <pad>
         # TODO dimension are wrong
         # TODO also, final tgt dimension should be cfg.max_ts (128). however, now it is 128 before bspan is concatednated with it
         # mask = torch.cat([torch.ones((mask.size(0), 1)).bool(), mask])
@@ -228,12 +228,6 @@ class ResponseDecoder(nn.Module):
         degree_reshaped[0, :, :cfg.degree_size] = degree.transpose(0,1)  # add 1 more timestep (the first one as one-hot degree)
         tgt = torch.cat([degree_reshaped, tgt], dim=0)  # concat along sequence lenght axis
 
-        print(tgt.shape)
-        print(mask.shape)
-        print(tgt_mask.shape)
-        print(memory.shape)
-        # THE ERROR: src_len is 150 and key_padding_mask.size(1) is 149
-        # BOTH are wrong and should be 128 (currently max_len)
         output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=mask)
         output = self.linear(output)
         return output
@@ -341,6 +335,8 @@ class SequicityModel(nn.Module):
             # probabilities, outputs of softmax instead of one-hot decoded words.
             # TODO should we use decoded bspan or the supplied one? if supplied, we have to train BSpanDecoder somehow.
             response = self.response_decoder(rdecoder_input, encoded, bdecoder_input, degree)
+            print('resp')
+            print(response.shape)
         else:
             #response = self.response_decoder(concat, encoded, bspan_decoded, degree)
             response = self._greedy_decode_output(\
@@ -399,9 +395,9 @@ def convert_batch(batch, params):
     # dict_keys(['dial_id', 'turn_num', 'user', 'response', 'bspan', 'u_len', 'm_len', 'degree', 'supervised'])
 
     for turn in batch:
-        user = torch.zeros(cfg.max_ts,len(turn['user']), dtype=torch.long)
+        user = torch.zeros(params['user_size'],len(turn['user']), dtype=torch.long)
         bspan = torch.zeros(params['bspan_size'],len(turn['bspan']), dtype=torch.long)
-        response = torch.zeros(cfg.max_ts,len(turn['response']), dtype=torch.long)
+        response = torch.zeros(params['response_size'], len(turn['response']), dtype=torch.long)
         degree = torch.zeros(5, len(turn['degree']), dtype=torch.long)
         for i, (u, b, r, d) in enumerate(zip(turn['user'], turn['bspan'], turn['response'], turn['degree'])):
             user[:len(u), i] = torch.tensor(u, dtype=torch.long)
@@ -426,7 +422,9 @@ def get_params():
     p['dropout_rdecoder'] = 0.2
     p['warm_lr'] = 0.1
     p['lr'] = 0.0001
+    p['user_size'] = 128
     p['bspan_size'] = 20
+    p['response_size'] = cfg.max_ts
 
     return p
 
@@ -456,7 +454,8 @@ def main_function():
         params['ntoken'],\
         params['ninp'],\
         params['nhead'],\
-        params['nhid'] - params['bspan_size'] - 1,\
+        # params['nhid'] - params['bspan_size'] - 1,\
+        params['bspan_size'],\
         params['nlayers'],\
         r,\
         params,\
@@ -484,15 +483,15 @@ def main_function():
     iterator = r.mini_batch_iterator('train') # bucketed by turn_num
     for batch in iterator:
         prev_bspan = None  # bspan from previous turn
-        for user, bspan, response, degree in convert_batch(batch, params):
+        for user, bspan, response_, degree in convert_batch(batch, params):
             optimizer.zero_grad()
-            out = model(user, bspan, response, degree)
-            # loss = 
+            print('start')
             # we want the loss to consider both BSpanDecoder outputs and ResponseDecoder outputs
             # CrossEntropy loss takes (N, C) and (N) 
             # TODO what about OOV? like name_SLOT
             # TODO this might be wrong, we want to train on probabilities, not labels
-            loss = criterion(out.view(-1, params['ntoken']), response.view(-1))
+            r2 = torch.cat([response_, torch.zeros((22, out.size(1)), dtype=torch.int64)])
+            loss = criterion(out.view(-1, params['ntoken']), r2.view(-1))
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
