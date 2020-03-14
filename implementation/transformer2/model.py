@@ -337,8 +337,6 @@ class SequicityModel(nn.Module):
             # probabilities, outputs of softmax instead of one-hot decoded words.
             # TODO should we use decoded bspan or the supplied one? if supplied, we have to train BSpanDecoder somehow.
             response = self.response_decoder(rdecoder_input, encoded, bdecoder_input, degree)
-            print('resp')
-            print(response.shape)
         else:
             #response = self.response_decoder(concat, encoded, bspan_decoded, degree)
             response = self._greedy_decode_output(\
