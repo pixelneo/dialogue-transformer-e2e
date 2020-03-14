@@ -228,6 +228,8 @@ class ResponseDecoder(nn.Module):
         degree_reshaped[0, :, :cfg.degree_size] = degree.transpose(0,1)  # add 1 more timestep (the first one as one-hot degree)
         tgt = torch.cat([degree_reshaped, tgt], dim=0)  # concat along sequence lenght axis
 
+        # THE ERROR: src_len is 150 and key_padding_mask.size(1) is 149
+        # BOTH are wrong and should be 128 (currently max_len)
         output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=mask)
         output = self.linear(output)
         return output
@@ -485,7 +487,8 @@ def main_function():
         prev_bspan = None  # bspan from previous turn
         for user, bspan, response_, degree in convert_batch(batch, params):
             optimizer.zero_grad()
-            print('start')
+            out = model(user, bspan, response_, degree)
+            # loss = 
             # we want the loss to consider both BSpanDecoder outputs and ResponseDecoder outputs
             # CrossEntropy loss takes (N, C) and (N) 
             # TODO what about OOV? like name_SLOT
