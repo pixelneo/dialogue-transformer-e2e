@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 import configparser
 
@@ -108,6 +109,8 @@ class _Config:
         return s
 
     def _init_logging_handler(self):
+        if not os.path.exists("log"):
+            os.makedirs("log")
         current_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
 
         stderr_handler = logging.StreamHandler()

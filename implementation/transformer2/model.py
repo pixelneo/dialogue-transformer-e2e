@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import math
+import os
+import argparse
 
 import torch
 import torch.nn as nn
@@ -135,9 +137,11 @@ class BSpanDecoder(nn.Module):
             output from linear layer, (vocab size), pre softmax
 
         """
+        tgt = tgt.long()
         go_tokens = torch.zeros((1, tgt.size(1)), dtype=torch.int64) + 3  # GO_2 token has index 3
 
         tgt = torch.cat([go_tokens, tgt], dim=0)  # concat GO_2 token along sequence lenght axis
+
 
         mask = tgt.eq(0).transpose(0,1)  # 0 corresponds to <pad>
         tgt = self.embedding(tgt) * self.ninp
@@ -288,6 +292,7 @@ class SequicityModel(nn.Module):
             inds.squeeze_(0)  # (batch)
 
             decoded_sentences[t,:].masked_scatter_(mask, inds)  # set decoded word at time step t for the whole batch
+
             input_[t, :] = inds
 
             # set mask if EOS is reached
@@ -325,11 +330,12 @@ class SequicityModel(nn.Module):
 
         # Even during training, we always have to decode BSpan, because we pass it to Response decoder
         bspan_decoded = self._greedy_decode_output(\
-                                   self.bspan_decoder, \
-                                   encoded, \
-                                   bdecoder_input, \
-                                   self.reader_.vocab.encode('EOS_Z2'),\
-                                   self.params['bspan_size'])
+                                       self.bspan_decoder, \
+                                       encoded, \
+                                       bdecoder_input, \
+                                       self.reader_.vocab.encode('EOS_Z2'),\
+                                       self.params['bspan_size'])
+
 
 
         if self.training:
@@ -428,7 +434,7 @@ def get_params():
 
     return p
 
-def main_function():
+def main_function(train_sequicity=True):
     cfg.init_handler('tsdf-camrest')
     cfg.dataset = 'camrest'
     r = reader.CamRest676Reader()
@@ -477,35 +483,77 @@ def main_function():
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
     criterion = nn.CrossEntropyLoss()
 
-    model.train()
+    if train_sequicity:
+        iterator = r.mini_batch_iterator('train') # bucketed by turn_num
+        eval_iterator = r.mini_batch_iterator('dev')
+        lowest_loss = 1000000000.0
 
-    iterator = r.mini_batch_iterator('train') # bucketed by turn_num
-    for epoch in range(cfg.epoch_num):
+        if not os.path.exists("models"):
+            os.makedirs("models")
+        for epoch in range(cfg.epoch_num):
+            model.train()
+            for batch in iterator:
+                prev_bspan = None  # bspan from previous turn
+                for user, bspan, response_, degree in convert_batch(batch, params):
+                    optimizer.zero_grad()
+                    out = model(user, bspan, response_, degree)
+                    # loss = 
+                    # we want the loss to consider both BSpanDecoder outputs and ResponseDecoder outputs
+                    # CrossEntropy loss takes (N, C) and (N) 
+                    # TODO what about OOV? like name_SLOT
+                    # TODO this might be wrong, we want to train on probabilities, not labels
+                    r2 = torch.cat([response_, torch.zeros((22, out.size(1)), dtype=torch.int64)])
+                    loss = criterion(out.view(-1, params['ntoken']), r2.view(-1))
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+                    optimizer.step()
+
+                    print(loss)
+
+            # TODO evaluate!!!
+            model.eval()
+            total_loss = 0.0
+            for batch in eval_iterator:
+                prev_bspan = None  # bspan from previous turn
+
+                for user, bspan, response_, degree in convert_batch(batch, params):
+                    out = model(user, bspan, response_, degree)
+                    r2 = torch.cat([response_, torch.zeros((22, out.size(1)), dtype=torch.int64)])
+                    loss = criterion(out.view(-1, params['ntoken']), r2.view(-1))
+                    total_loss += loss
+                print(total_loss, "in epoch", epoch)
+
+            # TODO save model
+            if total_loss < lowest_loss:
+                lowest_loss = total_loss
+                torch.save(model.state_dict(), "models/best_model.pt")
+
+            model_path = "models/sequicity_epoch_" + str(epoch + 1) + ".pt"
+            torch.save(model.state_dict(), model_path)
+
+    else: # test the best model
+        model.load_state_dict(torch.load("models/best_model.pt"))
+        model.train(t=False)
+        iterator = r.mini_batch_iterator('test') 
+        total_loss = 0.0
         for batch in iterator:
             prev_bspan = None  # bspan from previous turn
+
             for user, bspan, response_, degree in convert_batch(batch, params):
-                optimizer.zero_grad()
                 out = model(user, bspan, response_, degree)
-                # loss = 
-                # we want the loss to consider both BSpanDecoder outputs and ResponseDecoder outputs
-                # CrossEntropy loss takes (N, C) and (N) 
-                # TODO what about OOV? like name_SLOT
-                # TODO this might be wrong, we want to train on probabilities, not labels
                 r2 = torch.cat([response_, torch.zeros((22, out.size(1)), dtype=torch.int64)])
                 loss = criterion(out.view(-1, params['ntoken']), r2.view(-1))
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-                optimizer.step()
+                total_loss += loss
 
-                print(loss)
-        # TODO evaluate!!!
-        # TODO save model
-
+        print("Total loss on test dataset:", total_loss)
 
 
 
 if __name__=='__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train", action="store_true", default=False)
+    args = parser.parse_args()
     import random
     random.seed(1)
     torch.random.manual_seed(1)
-    main_function()
+    main_function(train_sequicity=args.train)
