@@ -138,7 +138,7 @@ class BSpanDecoder(nn.Module):
 
         """
         tgt = tgt.long()
-        go_tokens = torch.zeros((1, tgt.size(1)), dtype=torch.int64) + 3  # GO_2 token has index 3
+        go_tokens = torch.zeros((1, tgt.size(1)), dtype=tgt.dtype) + 3  # GO_2 token has index 3
 
         tgt = torch.cat([go_tokens, tgt], dim=0)  # concat GO_2 token along sequence lenght axis
 
@@ -207,7 +207,7 @@ class ResponseDecoder(nn.Module):
 
         """
 
-        go_tokens = torch.ones((1, tgt.size(1)), dtype=torch.int64)  # GO token has index 1
+        go_tokens = torch.ones((1, tgt.size(1)), dtype=tgt.dtype)  # GO token has index 1
         degree_reshaped = torch.zeros((1, tgt.size(1), cfg.embedding_size), dtype=torch.float32)
 
         tgt = torch.cat([bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence length axis
@@ -275,7 +275,7 @@ class SequicityModel(nn.Module):
         """
         input_ = initial_decoder_input  # shape (seq_len, batch)?
         pad_id = 0 if response else 4  # 4 is index for <pad2>
-        decoded_sentences = torch.zeros_like(input_) * pad_id
+        decoded_sentences = torch.zeros_like(input_, dtype=torch.int64) * pad_id
         mask = torch.ones(input_.size(1)).bool()  # shape: batch
         for t in range(max_ts):
             if response:  # response decoder
@@ -533,7 +533,7 @@ def main_function(train_sequicity=True):
 
     else: # test the best model
         model.load_state_dict(torch.load("models/best_model.pt"))
-        model.train(t=False)
+        model.eval()
         iterator = r.mini_batch_iterator('test') 
         total_loss = 0.0
         for batch in iterator:
