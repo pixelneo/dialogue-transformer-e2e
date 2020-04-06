@@ -7,6 +7,7 @@ import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 
 from config import global_config as cfg
 import reader
@@ -338,6 +339,7 @@ class SequicityModel(nn.Module):
         # bdecoder_input = bdecoder_input.transpose(0,1)
         # rdecoder_input = rdecoder_input.transpose(0,1)
 
+        response_decoded = None
         encoded = self.encoder(user_input)
 
         if self.training:
@@ -363,7 +365,7 @@ class SequicityModel(nn.Module):
         else:
             #response = self.response_decoder(concat, encoded, bspan_decoded, degree)
             response = self.response_decoder(rdecoder_input, encoded, bspan_decoded, degree)
-            # response = self._greedy_decode_output(\
+            # response_decoded = self._greedy_decode_output(\
                                        # self.response_decoder, \
                                        # encoded, \
                                        # rdecoder_input, \
@@ -374,7 +376,7 @@ class SequicityModel(nn.Module):
                                        # degree)
 
         # TODO return only response or bspan also?
-        return response
+        return response, response_decoded
 
 
 
@@ -514,12 +516,8 @@ def main_function(train_sequicity=True):
                 prev_bspan = None  # bspan from previous turn
                 for user, bspan, response_, degree in convert_batch(batch, params):
                     optimizer.zero_grad()
-                    out = model(user, bspan, response_, degree)
-                    # loss = 
-                    # we want the loss to consider both BSpanDecoder outputs and ResponseDecoder outputs
-                    # CrossEntropy loss takes (N, C) and (N) 
+                    out, _  = model(user, bspan, response_, degree)
                     # TODO what about OOV? like name_SLOT
-                    # TODO this might be wrong, we want to train on probabilities, not labels
                     r2 = torch.cat([response_, torch.zeros((22, out.size(1)), dtype=torch.int64)])
                     loss = criterion(out.view(-1, params['ntoken']), r2.view(-1))
                     loss.backward()
@@ -531,15 +529,23 @@ def main_function(train_sequicity=True):
             # TODO evaluate!!!
             model.eval()
             total_loss = 0.0
-            for batch in eval_iterator:
+            softmax = torch.nn.Softmax(-1)
+            for batch in iterator:
                 prev_bspan = None  # bspan from previous turn
-
                 for user, bspan, response_, degree in convert_batch(batch, params):
-                    out = model(user, bspan, response_, degree)
+                    out, _ = model(user, bspan, response_, degree)
                     r2 = torch.cat([response_, torch.zeros((22, out.size(1)), dtype=torch.int64)])
-                    loss = criterion(out.view(-1, params['ntoken']), r2.view(-1))
+                    loss = criterion(out.view(-1, 800), r2.view(-1))
+                    # TODO it just does not work
+                    decoded = torch.argmax(softmax(out), dim=-1)  # non autoregressive, just decode every timestep at once
+                    for s in decoded:
+                        x = r.vocab.sentence_decode(np.array(s))
+                        print(x) # print sentences
                     total_loss += loss
-                print(total_loss, "in epoch", epoch)
+                    print('Loss', loss)
+
+            print("Total loss on test dataset:", total_loss)
+
 
             # TODO save model
             if total_loss < lowest_loss:
@@ -554,13 +560,19 @@ def main_function(train_sequicity=True):
         model.eval()
         iterator = r.mini_batch_iterator('test') 
         total_loss = 0.0
+        softmax = torch.nn.Softmax(-1)
         for batch in iterator:
             prev_bspan = None  # bspan from previous turn
 
             for user, bspan, response_, degree in convert_batch(batch, params):
-                out = model(user, bspan, response_, degree)
+                out, _ = model(user, bspan, response_, degree)
                 r2 = torch.cat([response_, torch.zeros((22, out.size(1)), dtype=torch.int64)])
                 loss = criterion(out.view(-1, 800), r2.view(-1))
+                # TODO it just does not work
+                decoded = torch.argmax(softmax(out), dim=-1)  # non autoregressive, just decode every timestep at once
+                for s in decoded:
+                    x = r.vocab.sentence_decode(np.array(s))
+                    print(x) # print sentences
                 total_loss += loss
                 print('Loss', loss)
 
