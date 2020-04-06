@@ -209,9 +209,20 @@ class ResponseDecoder(nn.Module):
 
         go_tokens = torch.ones((1, tgt.size(1)), dtype=tgt.dtype)  # GO token has index 1
         degree_reshaped = torch.zeros((1, tgt.size(1), cfg.embedding_size), dtype=torch.float32)
+        # print('tgt.shape0')
+        # print(tgt.shape)
+        # print('bspan.shape0')
+        # print(bspan.shape)
+        # print('degree_ershaped.shape0')
+        # print(degree_reshaped.shape)
+        # print('go_tokens.shape0')
+        # print(go_tokens.shape)
 
         tgt = torch.cat([bspan, go_tokens, tgt], dim=0)  # concat bspan, GO and tokenstoken along sequence length axis
         # TODO pad `tgt` but also think of `degree` which is added later
+        # print('tgt.shape')
+        # print(tgt.shape)
+
 
         mask = torch.cat([torch.ones((1, tgt.size(1)), dtype=torch.int64), tgt]).eq(0).transpose(0,1)  # 0 corresponds to <pad>
         # TODO dimension are wrong
@@ -219,6 +230,8 @@ class ResponseDecoder(nn.Module):
         # mask = torch.cat([torch.ones((mask.size(0), 1)).bool(), mask])
         tgt = self.embedding(tgt) * self.ninp
         tgt = self.pos_encoder(tgt)
+        # print('tgt.shape2')
+        # print(tgt.shape)
 
         #    eg. [cheap restaurant EOS_Z1 EOS_Z2 PAD2 .... PAD2 01000 GO1 mask mask mask ..... ]
         #    ... [            ...          bspan    ... padding degree go     ....     masking ]
@@ -231,11 +244,15 @@ class ResponseDecoder(nn.Module):
         # tgt.size(1) is batch size (I know, why dim=1, but nn.Transformer wants it that way)
         degree_reshaped[0, :, :cfg.degree_size] = degree.transpose(0,1)  # add 1 more timestep (the first one as one-hot degree)
         tgt = torch.cat([degree_reshaped, tgt], dim=0)  # concat along sequence lenght axis
+        # print('tgt.shape3')
+        # print(tgt.shape)
 
         # THE ERROR: src_len is 150 and key_padding_mask.size(1) is 149
         # BOTH are wrong and should be 128 (currently max_len)
         output = self.transformer_decoder(tgt, memory, tgt_mask=tgt_mask, tgt_key_padding_mask=mask)
         output = self.linear(output)
+        # print('output.shape')
+        # print(output.shape)
         return output
 
 
@@ -326,7 +343,7 @@ class SequicityModel(nn.Module):
         if self.training:
             bdecoder_input = bdecoder_input
         else:
-            bdecoder_input = torch.zeros(cfg.max_ts-1, bdecoder_input.size(1)) # go token is added later, in BSpanDecoder (seq_len, batch)
+            bdecoder_input = torch.zeros(self.params['bspan_size'], bdecoder_input.size(1), dtype=torch.long) # go token is added later, in BSpanDecoder (seq_len, batch)
 
         # Even during training, we always have to decode BSpan, because we pass it to Response decoder
         bspan_decoded = self._greedy_decode_output(\
@@ -345,15 +362,16 @@ class SequicityModel(nn.Module):
             response = self.response_decoder(rdecoder_input, encoded, bdecoder_input, degree)
         else:
             #response = self.response_decoder(concat, encoded, bspan_decoded, degree)
-            response = self._greedy_decode_output(\
-                                       self.response_decoder, \
-                                       encoded, \
-                                       rdecoder_input, \
-                                       self.reader_.vocab.encode('EOS_M'),\
-                                       cfg.max_ts, \
-                                       True, \
-                                       bspan_decoded, \
-                                       degree)
+            response = self.response_decoder(rdecoder_input, encoded, bspan_decoded, degree)
+            # response = self._greedy_decode_output(\
+                                       # self.response_decoder, \
+                                       # encoded, \
+                                       # rdecoder_input, \
+                                       # self.reader_.vocab.encode('EOS_M'),\
+                                       # cfg.max_ts, \
+                                       # True, \
+                                       # bspan_decoded, \
+                                       # degree)
 
         # TODO return only response or bspan also?
         return response
@@ -542,8 +560,9 @@ def main_function(train_sequicity=True):
             for user, bspan, response_, degree in convert_batch(batch, params):
                 out = model(user, bspan, response_, degree)
                 r2 = torch.cat([response_, torch.zeros((22, out.size(1)), dtype=torch.int64)])
-                loss = criterion(out.view(-1, params['ntoken']), r2.view(-1))
+                loss = criterion(out.view(-1, 800), r2.view(-1))
                 total_loss += loss
+                print('Loss', loss)
 
         print("Total loss on test dataset:", total_loss)
 
