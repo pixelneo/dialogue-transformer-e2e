@@ -544,7 +544,6 @@ def main_function(train_sequicity=True):
                     total_loss += loss
                     print('Loss', loss)
 
-            print("Total loss on test dataset:", total_loss)
 
 
             # TODO save model
