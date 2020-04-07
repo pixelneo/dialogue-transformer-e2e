@@ -518,6 +518,7 @@ def main_function(train_sequicity=True):
             os.makedirs("models")
         for epoch in range(cfg.epoch_num):
             model.train()
+            print('Start epoch', epoch)
             for batch in iterator:
                 prev_bspan = None  # bspan from previous turn
                 for user, bspan, response_, degree in convert_batch(batch, params):
@@ -536,7 +537,7 @@ def main_function(train_sequicity=True):
             model.eval()
             total_loss = 0.0
             softmax = torch.nn.Softmax(-1)
-            for batch in iterator:
+            for batch in eval_iterator:
                 prev_bspan = None  # bspan from previous turn
                 for user, bspan, response_, degree in convert_batch(batch, params):
                     out, decoded = model(user, bspan, response_, degree)

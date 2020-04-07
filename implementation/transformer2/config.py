@@ -38,7 +38,7 @@ class _Config:
         self.entity = './data/CamRest676/CamRestOTGY.json'
         self.db = './data/CamRest676/CamRestDB.json'
         self.glove_path = './data/glove/glove.6B.50d.txt'
-        self.batch_size = 32
+        self.batch_size = 16 
         self.z_length = 8
         self.degree_size = 5
         self.layer_num = 1
