@@ -295,7 +295,13 @@ class SequicityModel(nn.Module):
         pad_id = 0 if response else 4  # 4 is index for <pad2>
         decoded_sentences = torch.zeros_like(input_, dtype=torch.int64) * pad_id
         mask = torch.ones(input_.size(1)).bool()  # shape: batch
-        for t in range(max_ts):
+        if response:
+            low = 128-max_ts
+            high = 128
+        else:
+            low= 0
+            high = max_ts
+        for t in range(low, high):
             if response:  # response decoder
                 out = decoder(input_, encoder_output, bspan, degree)
             else:
@@ -348,12 +354,6 @@ class SequicityModel(nn.Module):
             bdecoder_input = torch.zeros(self.params['bspan_size'], bdecoder_input.size(1), dtype=torch.long) # go token is added later, in BSpanDecoder (seq_len, batch)
 
         # Even during training, we always have to decode BSpan, because we pass it to Response decoder
-        bspan_decoded = self._greedy_decode_output(\
-                                       self.bspan_decoder, \
-                                       encoded, \
-                                       bdecoder_input, \
-                                       self.reader_.vocab.encode('EOS_Z2'),\
-                                       self.params['bspan_size'])
 
 
 
@@ -363,17 +363,23 @@ class SequicityModel(nn.Module):
             # TODO should we use decoded bspan or the supplied one? if supplied, we have to train BSpanDecoder somehow.
             response = self.response_decoder(rdecoder_input, encoded, bdecoder_input, degree)
         else:
+            bspan_decoded = self._greedy_decode_output(\
+                                       self.bspan_decoder, \
+                                       encoded, \
+                                       bdecoder_input, \
+                                       self.reader_.vocab.encode('EOS_Z2'),\
+                                       self.params['bspan_size'])
             #response = self.response_decoder(concat, encoded, bspan_decoded, degree)
             response = self.response_decoder(rdecoder_input, encoded, bspan_decoded, degree)
-            # response_decoded = self._greedy_decode_output(\
-                                       # self.response_decoder, \
-                                       # encoded, \
-                                       # rdecoder_input, \
-                                       # self.reader_.vocab.encode('EOS_M'),\
-                                       # cfg.max_ts, \
-                                       # True, \
-                                       # bspan_decoded, \
-                                       # degree)
+            response_decoded = self._greedy_decode_output(\
+                                       self.response_decoder, \
+                                       encoded, \
+                                       rdecoder_input, \
+                                       self.reader_.vocab.encode('EOS_M'),\
+                                       cfg.max_ts, \
+                                       True, \
+                                       bspan_decoded, \
+                                       degree)
 
         # TODO return only response or bspan also?
         return response, response_decoded
@@ -533,16 +539,11 @@ def main_function(train_sequicity=True):
             for batch in iterator:
                 prev_bspan = None  # bspan from previous turn
                 for user, bspan, response_, degree in convert_batch(batch, params):
-                    out, _ = model(user, bspan, response_, degree)
-                    r2 = torch.cat([response_, torch.zeros((22, out.size(1)), dtype=torch.int64)])
-                    loss = criterion(out.view(-1, 800), r2.view(-1))
+                    out, decoded = model(user, bspan, response_, degree)
                     # TODO it just does not work
-                    decoded = torch.argmax(softmax(out), dim=-1)  # non autoregressive, just decode every timestep at once
                     for s in decoded:
                         x = r.vocab.sentence_decode(np.array(s))
                         print(x) # print sentences
-                    total_loss += loss
-                    print('Loss', loss)
 
 
 
@@ -564,16 +565,11 @@ def main_function(train_sequicity=True):
             prev_bspan = None  # bspan from previous turn
 
             for user, bspan, response_, degree in convert_batch(batch, params):
-                out, _ = model(user, bspan, response_, degree)
-                r2 = torch.cat([response_, torch.zeros((22, out.size(1)), dtype=torch.int64)])
-                loss = criterion(out.view(-1, 800), r2.view(-1))
+                out, decoded = model(user, bspan, response_, degree)  # decoded are autoregressively decoded sentences
                 # TODO it just does not work
-                decoded = torch.argmax(softmax(out), dim=-1)  # non autoregressive, just decode every timestep at once
                 for s in decoded:
                     x = r.vocab.sentence_decode(np.array(s))
                     print(x) # print sentences
-                total_loss += loss
-                print('Loss', loss)
 
         print("Total loss on test dataset:", total_loss)
 
