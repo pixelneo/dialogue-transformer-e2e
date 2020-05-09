@@ -292,36 +292,50 @@ class SequicityModel(nn.Module):
 
         """
         input_ = initial_decoder_input  # shape (seq_len, batch)?
+        print('inp_', input_.shape)
         pad_id = 0 if response else 4  # 4 is index for <pad2>
-        decoded_sentences = torch.zeros_like(input_, dtype=torch.int64) * pad_id
+        if response:
+            decoded_sentences = torch.zeros((128, input_.size(1)), dtype=torch.int64) * pad_id
+        else:
+            decoded_sentences = torch.zeros_like(input_, dtype=torch.int64) * pad_id
+
+        print('decoded_sent', decoded_sentences.shape)
         mask = torch.ones(input_.size(1)).bool()  # shape: batch
         if response:
             low = 128-max_ts
             high = 128
         else:
-            low= 0
+            low = 0
             high = max_ts
         for t in range(low, high):
             if response:  # response decoder
                 out = decoder(input_, encoder_output, bspan, degree)
+                print(out.shape)
             else:
                 out = decoder(input_, encoder_output)
 
             # probs = nn.Softmax(out, dim=-1)  # may not be true: shape: (seq_len, batch, probs)
 
-            probs = nn.functional.softmax(out[t,:,:], dim=-1)  # get prob for only t timestep (1,batch,probs)?
-            _, inds = torch.topk(probs, 1)  # greedy decode (1, batch, 1)
+            # probs = nn.functional.softmax(out[t,:,:], dim=-1)  # get prob for only t timestep (1,batch,probs)?
+            _, inds = torch.topk(out[t,:,:], 1, dim=-1)  # greedy decode (1, batch, 1)
+            # print(inds)
 
             inds.squeeze_(-1)  # (1, batch, 1) -> (1, batch)
             inds.squeeze_(0)  # (batch)
 
-            decoded_sentences[t,:].masked_scatter_(mask, inds)  # set decoded word at time step t for the whole batch
+            # decoded_sentences[t,:].masked_scatter_(mask, inds)  # set decoded word at time step t for the whole batch
+            decoded_sentences[t,:] = inds
 
-            input_[t, :] = inds
+            # TODO this does not work, for response, it should decode only sequnce after bspan, degre...
+            if response:
+                input_[t-max_ts, :] = inds
+            else:
+                input_[t, :] = inds
+
 
             # set mask if EOS is reached
-            current_t_mask = (inds != eos_id)  # 0 if eos at t timestep
-            mask = current_t_mask & mask
+            # current_t_mask = (inds != eos_id)  # 0 if eos at t timestep
+            # mask = current_t_mask & mask
 
         return decoded_sentences
 
@@ -369,8 +383,9 @@ class SequicityModel(nn.Module):
                                        bdecoder_input, \
                                        self.reader_.vocab.encode('EOS_Z2'),\
                                        self.params['bspan_size'])
+            print('bspan dec', bspan_decoded.shape)
             #response = self.response_decoder(concat, encoded, bspan_decoded, degree)
-            response = self.response_decoder(rdecoder_input, encoded, bspan_decoded, degree)
+            response = None# self.response_decoder(rdecoder_input, encoded, bspan_decoded, degree)
             response_decoded = self._greedy_decode_output(\
                                        self.response_decoder, \
                                        encoded, \
@@ -380,6 +395,7 @@ class SequicityModel(nn.Module):
                                        True, \
                                        bspan_decoded, \
                                        degree)
+            print(response_decoded.shape)
 
         # TODO return only response or bspan also?
         return response, response_decoded
@@ -540,7 +556,7 @@ def main_function(train_sequicity=True):
             for batch in eval_iterator:
                 prev_bspan = None  # bspan from previous turn
                 for user, bspan, response_, degree in convert_batch(batch, params):
-                    out, decoded = model(user, bspan, response_, degree)
+                    _, decoded = model(user, bspan, response_, degree)
                     # TODO it just does not work
                     for s in decoded:
                         x = r.vocab.sentence_decode(np.array(s))
@@ -566,7 +582,7 @@ def main_function(train_sequicity=True):
             prev_bspan = None  # bspan from previous turn
 
             for user, bspan, response_, degree in convert_batch(batch, params):
-                out, decoded = model(user, bspan, response_, degree)  # decoded are autoregressively decoded sentences
+                _, decoded = model(user, bspan, response_, degree)  # decoded are autoregressively decoded sentences
                 # TODO it just does not work
                 for s in decoded:
                     x = r.vocab.sentence_decode(np.array(s))
