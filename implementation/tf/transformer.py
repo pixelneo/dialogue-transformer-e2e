@@ -2,6 +2,9 @@ import tensorflow as tf
 import time
 import numpy as np
 from reader import *
+import os
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 
 def get_angles(pos, i, d_model):
@@ -147,7 +150,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
 
 def point_wise_feed_forward_network(d_model, dff):
   return tf.keras.Sequential([
-      tf.keras.layers.Dense(dff, activation='relu'),  # (batch_size, seq_len, dff)
+      tf.keras.layers.Dense(dff, activation='relu', input_shape=(None, d_model)),  # (batch_size, seq_len, dff)
       tf.keras.layers.Dense(d_model)  # (batch_size, seq_len, d_model)
   ])
 
@@ -222,7 +225,7 @@ class Encoder(tf.keras.layers.Layer):
         self.d_model = d_model
         self.num_layers = num_layers
 
-        self.embedding = tf.keras.layers.Embedding(input_vocab_size, d_model)
+        self.embedding = tf.keras.layers.Embedding(input_vocab_size, d_model) # TODO load the glove embeddings
         self.pos_encoding = positional_encoding(maximum_position_encoding,
                                                 self.d_model)
 
@@ -301,7 +304,18 @@ class Transformer(tf.keras.Model):
         self.response_final = tf.keras.layers.Dense(target_vocab_size)
         self.bspan_final = tf.keras.layers.Dense(target_vocab_size)
 
-    def call(self, inp, tar, training, enc_padding_mask, look_ahead_mask, dec_padding_mask):
+    def bspan(self, inp, tar, training, enc_padding_mask, look_ahead_mask, dec_padding_mask):
+        enc_output = self.encoder(inp, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
+
+        # dec_output.shape == (batch_size, tar_seq_len, d_model)
+        dec_output, attention_weights = self.bspan_decoder(
+            tar, enc_output, training, look_ahead_mask, dec_padding_mask)
+
+        bspan_output = self.response_final(dec_output)  # (batch_size, tar_seq_len, target_vocab_size)
+
+        return bspan_output, attention_weights
+
+    def response(self, inp, tar, training, enc_padding_mask, look_ahead_mask, dec_padding_mask):
         enc_output = self.encoder(inp, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
 
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
@@ -344,17 +358,17 @@ def loss_function(real, pred):
 
 
 class SeqModel:
-    def __init__(self, tokenizer, num_layers=4, d_model=128, dff=512, num_heads=8, dropout_rate=0.1):
-        self.tokenizer = tokenizer
-        self.vocab_size = tokenizer.GetPieceSize()
-        input_vocab_size = tokenizer.GetPieceSize() + 2
-        target_vocab_size = tokenizer.GetPieceSize() + 2
-        dropout_rate = 0.1
+    def __init__(self, vocab_size, num_layers=4, d_model=50, dff=512, num_heads=5, dropout_rate=0.1):
+        self.vocab_size = vocab_size
+        input_vocab_size = vocab_size
+        target_vocab_size = vocab_size
 
         self.learning_rate = CustomSchedule(d_model)
         self.optimizer = tf.keras.optimizers.Adam(self.learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
-        self.train_loss = tf.keras.metrics.Mean(name='train_loss')
-        self.train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
+        self.bspan_loss = tf.keras.metrics.Mean(name='train_loss')
+        self.response_loss = tf.keras.metrics.Mean(name='train_loss')
+        self.bspan_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
+        self.response_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
 
         self.transformer = Transformer(num_layers, d_model, num_heads, dff,
                                   input_vocab_size, target_vocab_size,
@@ -362,49 +376,50 @@ class SeqModel:
                                   pe_target=target_vocab_size,
                                   rate=dropout_rate)
 
-    @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
-    def train_step(self, inp, tar):
+    #@tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    #    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+    def train_step_bspan(self, inp, tar):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
 
         enc_padding_mask, combined_mask, dec_padding_mask = create_masks(inp, tar_inp)
 
         with tf.GradientTape() as tape:
-            predictions, _ = self.transformer(inp, tar_inp,
-                                         True,
-                                         enc_padding_mask,
-                                         combined_mask,
-                                         dec_padding_mask)
+            predictions, _ = self.transformer.bspan(inp=inp, tar=tar_inp, training=True,
+                                                    enc_padding_mask=enc_padding_mask, look_ahead_mask=combined_mask,
+                                                    dec_padding_mask=dec_padding_mask)
+
             loss = loss_function(tar_real, predictions)
 
         gradients = tape.gradient(loss, self.transformer.trainable_variables)
+        gradients =[grad if grad is not None else tf.zeros_like(var)
+                    for grad, var in zip(gradients, self.transformer.trainable_variables)]
         self.optimizer.apply_gradients(zip(gradients, self.transformer.trainable_variables))
 
-        self.train_loss(loss)
-        self.train_accuracy(tar_real, predictions)
+        self.bspan_loss(loss)
+        self.bspan_accuracy(tar_real, predictions)
 
-    @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
-    def train_step_bspan(self, previous_bspans, previous_responses, user_inputs, target_bspan):
-        tar_inp = target_bspan[:, :-1]
-        tar_real = target_bspan[:, 1:]
+    #@tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    #    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+    def train_step_response(self, inp, tar):
+        tar_inp = tar[:, :-1]
+        tar_real = tar[:, 1:]
 
         enc_padding_mask, combined_mask, dec_padding_mask = create_masks(inp, tar_inp)
 
         with tf.GradientTape() as tape:
-            predictions, _ = self.transformer(inp, tar_inp,
-                                         True,
-                                         enc_padding_mask,
-                                         combined_mask,
-                                         dec_padding_mask)
+            predictions, _ = self.transformer.response(inp=inp, tar=tar_inp, training=True,
+                                                       enc_padding_mask=enc_padding_mask, look_ahead_mask=combined_mask,
+                                                       dec_padding_mask=dec_padding_mask)
             loss = loss_function(tar_real, predictions)
 
         gradients = tape.gradient(loss, self.transformer.trainable_variables)
+        gradients =[grad if grad is not None else tf.zeros_like(var)
+                    for grad, var in zip(gradients, self.transformer.trainable_variables)]
         self.optimizer.apply_gradients(zip(gradients, self.transformer.trainable_variables))
 
-        self.train_loss(loss)
-        self.train_accuracy(tar_real, predictions)
+        self.response_loss(loss)
+        self.response_accuracy(tar_real, predictions)
 
     def evaluate(self, inp_sentence, MAX_LENGTH=40):
         start_token = [self.vocab_size]
@@ -446,47 +461,6 @@ class SeqModel:
 
         return tf.squeeze(output, axis=0), attention_weights
 
-    def train(self, EPOCHS, src_sentences, trg_sentences, save_minutes=30):
-        start_time = time.time()
-        every_n_seconds = save_minutes * 60
-        last_saved = 0.
-
-        checkpoint_path = "./checkpoints/train"
-        ckpt = tf.train.Checkpoint(transformer=self.transformer, optimizer=self.optimizer)
-
-        ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=50)
-
-        # if a checkpoint exists, restore the latest checkpoint.
-        if ckpt_manager.latest_checkpoint:
-            ckpt.restore(ckpt_manager.latest_checkpoint)
-            print('Latest checkpoint restored!!')
-
-        for epoch in range(EPOCHS):
-            print("Training epoch {}.".format(epoch))
-            start = time.time()
-
-            self.train_loss.reset_states()
-            self.train_accuracy.reset_states()
-
-            for (batch, (inp, tar)) in enumerate(batch_generator(src_sentences, trg_sentences, tokenizer=self.tokenizer)):
-                self.train_step(inp, tar)
-
-                if batch % 50 == 0:
-                    print('Epoch {} Batch {} Loss {:.4f} Accuracy {:.4f}'.format(
-                        epoch + 1, batch, self.train_loss.result(), self.train_accuracy.result()))
-
-                new_time = time.time() - start_time
-                if new_time // every_n_seconds > last_saved // every_n_seconds or last_saved == 0.:
-                    last_saved = new_time
-                    ckpt_save_path = ckpt_manager.save()
-                    print('Saving checkpoint at {} after {} seconds'.format(ckpt_save_path, new_time))
-
-            print('Epoch {} Loss {:.4f} Accuracy {:.4f}'.format(epoch + 1,
-                                                                self.train_loss.result(),
-                                                                self.train_accuracy.result()))
-
-            print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start))
-
     def restore_latest(self, checkpoint_path="./checkpoints/train"):
         ckpt = tf.train.Checkpoint(transformer=self.transformer, optimizer=self.optimizer)
 
@@ -498,25 +472,56 @@ class SeqModel:
             print('Latest checkpoint restored!!')
 
 
+def tensorize(id_lists):
+    return tf.ragged.constant([x for x in id_lists]).to_tensor()
+
+
+def produce_bspan_decoder_input(previous_bspan, previous_response, user_input):
+    inputs =[]
+    for counter, (x, y, z) in enumerate(zip(previous_bspan, previous_response, user_input)):
+        new_sample = x + y + z
+        inputs.append(new_sample)
+    return tensorize(inputs)
+
+
+def produce_response_decoder_input(previous_bspan, previous_response, user_input, bspan, kb):
+    inputs = [a + b + c + d + e for a, b, c, d, e in zip(previous_bspan, previous_response, user_input, bspan, kb)]
+    return tensorize(inputs)
+
+
 if __name__ == "__main__":
     ds = "tsdf-camrest"
     cfg.init_handler(ds)
     cfg.dataset = ds.split('-')[-1]
     reader = CamRest676Reader()
-    seq_len = 512
     data_iterator = reader.mini_batch_iterator('train')
-    for iter_num, dial_batch in enumerate(data_iterator):
-        turn_states = {}
-        prev_z = None
-        for turn_num, turn_batch in enumerate(dial_batch):
-            _, _, user, response, bspan, u_len, m_len, degree, _ = turn_batch.values()
-            print(bspan)
-            batch_size = len(user)
-            ragged_user = tf.ragged.constant([x for x in user])
-            ragged_bspan = tf.ragged.constant([x for x in bspan])
-            ragged_response = tf.ragged.constant([x for x in response])
+    model = SeqModel(vocab_size=cfg.vocab_size)
+    prev_bspan_eos, bspan_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
+    epochs = 10
+    for epoch in range(epochs):
+        for iter_num, dial_batch in enumerate(data_iterator):
+            turn_states = {}
+            prev_z = None
+            previous_bspan, previous_response = None, None
+            for turn_num, turn_batch in enumerate(dial_batch):
+                _, _, user, response, bspan_received, u_len, m_len, degree, _ = turn_batch.values()
+                batch_size = len(user)
+                if previous_bspan is None:
+                    previous_bspan = [[reader.vocab.encode(prev_bspan_eos)] for i in range(batch_size)]
+                    previous_response = [[reader.vocab.encode(response_eos)] for i in range(batch_size)]
+                target_bspan, target_response = tensorize(bspan_received), tensorize(response)
 
-            tf_dataset = tf.data.Dataset.from_tensor_slices((ragged_user.to_tensor(),
-                                                             ragged_bspan.to_tensor(), ragged_response.to_tensor()))
+                bspan_decoder_input = produce_bspan_decoder_input(previous_bspan, previous_response, user)
+                response_decoder_input = produce_response_decoder_input(previous_bspan, previous_response,
+                                                                        user, bspan_received, degree)
+                # TODO: I THINK degree is the database result, but I am really not sure, using it tentatively
 
-            input()
+                # training the model
+                # TODO: try padding to same length and see if tf function is happy
+                model.train_step_bspan(bspan_decoder_input, target_bspan)
+                model.train_step_response(response_decoder_input, target_response)
+
+                previous_bspan = [x if x != reader.vocab.encode(bspan_eos) else reader.vocab.encode(prev_bspan_eos)
+                                  for x in [y for y in bspan_received]]
+                previous_response = response
+                print(model.response_loss.result(), model.bspan_loss.result())
