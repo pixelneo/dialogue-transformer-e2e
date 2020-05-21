@@ -376,8 +376,8 @@ class SeqModel:
                                   pe_target=target_vocab_size,
                                   rate=dropout_rate)
 
-    #@tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-    #    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+    @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
     def train_step_bspan(self, inp, tar):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
@@ -399,8 +399,8 @@ class SeqModel:
         self.bspan_loss(loss)
         self.bspan_accuracy(tar_real, predictions)
 
-    #@tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-    #    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+    @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
     def train_step_response(self, inp, tar):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
@@ -473,7 +473,8 @@ class SeqModel:
 
 
 def tensorize(id_lists):
-    return tf.ragged.constant([x for x in id_lists]).to_tensor()
+    tensorized = tf.ragged.constant([x for x in id_lists]).to_tensor()
+    return tf.cast(tensorized, dtype=tf.int32)
 
 
 def produce_bspan_decoder_input(previous_bspan, previous_response, user_input):
@@ -494,11 +495,11 @@ if __name__ == "__main__":
     cfg.init_handler(ds)
     cfg.dataset = ds.split('-')[-1]
     reader = CamRest676Reader()
-    data_iterator = reader.mini_batch_iterator('train')
     model = SeqModel(vocab_size=cfg.vocab_size)
     prev_bspan_eos, bspan_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
     epochs = 10
     for epoch in range(epochs):
+        data_iterator = reader.mini_batch_iterator('train')
         for iter_num, dial_batch in enumerate(data_iterator):
             turn_states = {}
             prev_z = None
@@ -514,10 +515,9 @@ if __name__ == "__main__":
                 bspan_decoder_input = produce_bspan_decoder_input(previous_bspan, previous_response, user)
                 response_decoder_input = produce_response_decoder_input(previous_bspan, previous_response,
                                                                         user, bspan_received, degree)
-                # TODO: I THINK degree is the database result, but I am really not sure, using it tentatively
+                # TODO: the response decoding only uses the response decoder, not the encoder
 
                 # training the model
-                # TODO: try padding to same length and see if tf function is happy
                 model.train_step_bspan(bspan_decoder_input, target_bspan)
                 model.train_step_response(response_decoder_input, target_response)
 
