@@ -244,7 +244,7 @@ class Encoder(tf.keras.layers.Layer):
         self.d_model = d_model
         self.num_layers = num_layers
 
-        if embeddings_matrix:
+        if embeddings_matrix is not None:
             self.embedding = tf.keras.layers.Embedding(input_vocab_size, d_model,
                                                        embeddings_initializer=tf.keras.initializers.Constant(embeddings_matrix))
         else:
@@ -282,7 +282,7 @@ class Decoder(tf.keras.layers.Layer):
         self.d_model = d_model
         self.num_layers = num_layers
 
-        if embeddings_matrix:
+        if embeddings_matrix is not None:
             self.embedding = tf.keras.layers.Embedding(target_vocab_size, d_model,
                                                        embeddings_initializer=tf.keras.initializers.Constant(embeddings_matrix))
         else:
@@ -386,6 +386,25 @@ def loss_function(real, pred):
     return tf.reduce_sum(loss_) / tf.reduce_sum(mask)
 
 
+def tensorize(id_lists):
+    tensorized = tf.ragged.constant([x for x in id_lists]).to_tensor()
+    return tf.cast(tensorized, dtype=tf.int32)
+
+
+# TODO change these functions so that they can take tensor input and not just list
+def produce_bspan_decoder_input(previous_bspan, previous_response, user_input):
+    inputs =[]
+    for counter, (x, y, z) in enumerate(zip(previous_bspan, previous_response, user_input)):
+        new_sample = x + y + z  # TODO concatenation should be more readable than this
+        inputs.append(new_sample)
+    return tensorize(inputs)
+
+
+def produce_response_decoder_input(previous_bspan, previous_response, user_input, bspan, kb):
+    inputs = [a + b + c + d + e for a, b, c, d, e in zip(previous_bspan, previous_response, user_input, bspan, kb)]
+    return tensorize(inputs)
+
+
 class SeqModel:
     def __init__(self, vocab_size, num_layers=4, d_model=50, dff=512, num_heads=5, dropout_rate=0.1, reader=None):
         self.vocab_size = vocab_size
@@ -398,6 +417,7 @@ class SeqModel:
         self.response_loss = tf.keras.metrics.Mean(name='train_loss')
         self.bspan_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
         self.response_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
+        self.reader = reader
 
         if reader:
             print("Reading pre-trained word embeddings with {} dimensions".format(d_model))
@@ -457,74 +477,68 @@ class SeqModel:
         self.response_loss(loss)
         self.response_accuracy(tar_real, predictions)
 
-    def evaluate(self, inp_sentence, MAX_LENGTH=40):
-        start_token = [self.vocab_size]
-        end_token = [self.vocab_size + 1]
+    def train_model(self, epochs=20):
+        prev_bspan_eos, bspan_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
+        for epoch in range(epochs):
+            data_iterator = self.reader.mini_batch_iterator('train')
+            for iter_num, dial_batch in enumerate(data_iterator):
+                previous_bspan, previous_response = None, None
+                for turn_num, turn_batch in enumerate(dial_batch):
+                    _, _, user, response, bspan_received, u_len, m_len, degree, _ = turn_batch.values()
+                    batch_size = len(user)
+                    if previous_bspan is None:
+                        previous_bspan = [[self.reader.vocab.encode(prev_bspan_eos)] for i in range(batch_size)]
+                        previous_response = [[self.reader.vocab.encode(response_eos)] for i in range(batch_size)]
+                    target_bspan, target_response = tensorize(bspan_received), tensorize(response)
 
-        # inp sentence is portuguese, hence adding the start and end token
-        inp_sentence = start_token + self.tokenizer.encode_as_ids(inp_sentence) + end_token
-        encoder_input = tf.expand_dims(inp_sentence, 0)
+                    bspan_decoder_input = produce_bspan_decoder_input(previous_bspan, previous_response, user)
+                    response_decoder_input = produce_response_decoder_input(previous_bspan, previous_response,
+                                                                            user, bspan_received, degree)
+                    # TODO actually save the models, keeping track of the best one
 
-        # as the target is english, the first word to the transformer should be the
-        # english start token.
-        decoder_input = [self.vocab_size]
+                    # training the model
+                    self.train_step_bspan(bspan_decoder_input, target_bspan)
+                    self.train_step_response(response_decoder_input, target_response)
+
+                    previous_bspan = [x if x != self.reader.vocab.encode(bspan_eos) else reader.vocab.encode(prev_bspan_eos)
+                                      for x in [y for y in bspan_received]]
+                    previous_response = response
+            print("Completed epoch #{} of {}".format(epoch + 1, epochs))
+            print(model.response_loss.result(), model.bspan_loss.result())
+
+    def auto_regress(self, input_sequence, decoder, MAX_LENGTH=256):
+        assert decoder in ["bspan", "response"]
+        decoder_input = []
         output = tf.expand_dims(decoder_input, 0)
+        end_token_id = self.reader.vocab.encode("EOS_Z2") if decoder == "bspan" else self.reader.vocab.encode("EOS_M")
 
         for i in range(MAX_LENGTH):
-            enc_padding_mask, combined_mask, dec_padding_mask = create_masks(
-                encoder_input, output)
+            enc_padding_mask, combined_mask, dec_padding_mask = create_masks(input_sequence, output)
 
             # predictions.shape == (batch_size, seq_len, vocab_size)
-            predictions, attention_weights = self.transformer(encoder_input,
-                                                         output,
-                                                         False,
-                                                         enc_padding_mask,
-                                                         combined_mask,
-                                                         dec_padding_mask)
+            if decoder == "bspan":
+                predictions, attention_weights = self.transformer.bspan(input_sequence, output, False,
+                                                                        enc_padding_mask, combined_mask,
+                                                                        dec_padding_mask)
+            else:
+                predictions, attention_weights = self.transformer.response(input_sequence, output, False,
+                                                                           enc_padding_mask, combined_mask,
+                                                                           dec_padding_mask)
 
-            # select the last word from the seq_len dimension
             predictions = predictions[:, -1:, :]  # (batch_size, 1, vocab_size)
-
             predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
 
-            # return the result if the predicted_id is equal to the end token
-            if predicted_id == self.tokenizer.GetPieceSize() + 1:
+            if predicted_id == end_token_id:
                 return tf.squeeze(output, axis=0), attention_weights
 
-            # concatentate the predicted_id to the output which is given to the decoder
-            # as its input.
             output = tf.concat([output, predicted_id], axis=-1)
 
         return tf.squeeze(output, axis=0), attention_weights
 
-    def restore_latest(self, checkpoint_path="./checkpoints/train"):
-        ckpt = tf.train.Checkpoint(transformer=self.transformer, optimizer=self.optimizer)
-
-        ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=50)
-
-        # if a checkpoint exists, restore the latest checkpoint.
-        if ckpt_manager.latest_checkpoint:
-            ckpt.restore(ckpt_manager.latest_checkpoint)
-            print('Latest checkpoint restored!!')
-
-
-def tensorize(id_lists):
-    tensorized = tf.ragged.constant([x for x in id_lists]).to_tensor()
-    return tf.cast(tensorized, dtype=tf.int32)
-
-
-# TODO change these functions so that they can take tensor input and not just list
-def produce_bspan_decoder_input(previous_bspan, previous_response, user_input):
-    inputs =[]
-    for counter, (x, y, z) in enumerate(zip(previous_bspan, previous_response, user_input)):
-        new_sample = x + y + z  # TODO concatenation should be more readable than this
-        inputs.append(new_sample)
-    return tensorize(inputs)
-
-
-def produce_response_decoder_input(previous_bspan, previous_response, user_input, bspan, kb):
-    inputs = [a + b + c + d + e for a, b, c, d, e in zip(previous_bspan, previous_response, user_input, bspan, kb)]
-    return tensorize(inputs)
+    def evaluate(self, mode="dev"):
+        assert mode in ["dev", "test"]
+        # TODO
+        pass
 
 
 if __name__ == "__main__":
@@ -532,36 +546,6 @@ if __name__ == "__main__":
     cfg.init_handler(ds)
     cfg.dataset = ds.split('-')[-1]
     reader = CamRest676Reader()
-    embeddings = read_embeddings(reader)
-    model = SeqModel(vocab_size=cfg.vocab_size)
-    prev_bspan_eos, bspan_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
-    epochs = 10
-    for epoch in range(epochs):
-        data_iterator = reader.mini_batch_iterator('train')
-        for iter_num, dial_batch in enumerate(data_iterator):
-            turn_states = {}
-            prev_z = None
-            previous_bspan, previous_response = None, None
-            for turn_num, turn_batch in enumerate(dial_batch):
-                _, _, user, response, bspan_received, u_len, m_len, degree, _ = turn_batch.values()
-                batch_size = len(user)
-                if previous_bspan is None:
-                    previous_bspan = [[reader.vocab.encode(prev_bspan_eos)] for i in range(batch_size)]
-                    previous_response = [[reader.vocab.encode(response_eos)] for i in range(batch_size)]
-                target_bspan, target_response = tensorize(bspan_received), tensorize(response)
+    model = SeqModel(vocab_size=cfg.vocab_size, reader=reader)
+    model.train_model()
 
-                bspan_decoder_input = produce_bspan_decoder_input(previous_bspan, previous_response, user)
-                response_decoder_input = produce_response_decoder_input(previous_bspan, previous_response,
-                                                                        user, bspan_received, degree)
-                # TODO write cleaner evaluate and train functions
-
-                # TODO actually save the models, keeping track of the best one
-
-                # training the model
-                model.train_step_bspan(bspan_decoder_input, target_bspan)
-                model.train_step_response(response_decoder_input, target_response)
-
-                previous_bspan = [x if x != reader.vocab.encode(bspan_eos) else reader.vocab.encode(prev_bspan_eos)
-                                  for x in [y for y in bspan_received]]
-                previous_response = response
-                print(model.response_loss.result(), model.bspan_loss.result())
