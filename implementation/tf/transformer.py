@@ -396,6 +396,8 @@ def produce_bspan_decoder_input(previous_bspan, previous_response, user_input):
     inputs =[]
     for counter, (x, y, z) in enumerate(zip(previous_bspan, previous_response, user_input)):
         new_sample = x + y + z  # TODO concatenation should be more readable than this
+        print(x,y,z)
+        print(new_sample)
         inputs.append(new_sample)
     return tensorize(inputs)
 
@@ -452,7 +454,6 @@ class SeqModel:
                     for grad, var in zip(gradients, self.transformer.trainable_variables)]
         self.optimizer.apply_gradients(zip(gradients, self.transformer.trainable_variables))
 
-        self.bspan_loss(loss)
         self.bspan_accuracy(tar_real, predictions)
 
     @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
@@ -474,11 +475,11 @@ class SeqModel:
                     for grad, var in zip(gradients, self.transformer.trainable_variables)]
         self.optimizer.apply_gradients(zip(gradients, self.transformer.trainable_variables))
 
-        self.response_loss(loss)
         self.response_accuracy(tar_real, predictions)
 
     def train_model(self, epochs=20):
-        prev_bspan_eos, bspan_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
+        # TODO add a start token to all of these things and increase vocab size by one
+        constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
         for epoch in range(epochs):
             data_iterator = self.reader.mini_batch_iterator('train')
             for iter_num, dial_batch in enumerate(data_iterator):
@@ -487,7 +488,8 @@ class SeqModel:
                     _, _, user, response, bspan_received, u_len, m_len, degree, _ = turn_batch.values()
                     batch_size = len(user)
                     if previous_bspan is None:
-                        previous_bspan = [[self.reader.vocab.encode(prev_bspan_eos)] for i in range(batch_size)]
+                        previous_bspan = [[self.reader.vocab.encode(constraint_eos),
+                                           self.reader.vocab.encode(request_eos)] for i in range(batch_size)]
                         previous_response = [[self.reader.vocab.encode(response_eos)] for i in range(batch_size)]
                     target_bspan, target_response = tensorize(bspan_received), tensorize(response)
 
@@ -500,16 +502,13 @@ class SeqModel:
                     self.train_step_bspan(bspan_decoder_input, target_bspan)
                     self.train_step_response(response_decoder_input, target_response)
 
-                    previous_bspan = [x if x != self.reader.vocab.encode(bspan_eos) else reader.vocab.encode(prev_bspan_eos)
-                                      for x in [y for y in bspan_received]]
+                    previous_bspan = bspan_received
                     previous_response = response
             print("Completed epoch #{} of {}".format(epoch + 1, epochs))
-            print(model.response_loss.result(), model.bspan_loss.result())
 
     def auto_regress(self, input_sequence, decoder, MAX_LENGTH=256):
         assert decoder in ["bspan", "response"]
-        decoder_input = []
-        output = tf.expand_dims(decoder_input, 0)
+        output = tf.zeros([0,1], dtype=tf.int32)
         end_token_id = self.reader.vocab.encode("EOS_Z2") if decoder == "bspan" else self.reader.vocab.encode("EOS_M")
 
         for i in range(MAX_LENGTH):
@@ -535,10 +534,30 @@ class SeqModel:
 
         return tf.squeeze(output, axis=0), attention_weights
 
-    def evaluate(self, mode="dev"):
-        assert mode in ["dev", "test"]
-        # TODO
-        pass
+    def evaluate(self, previous_bspan, previous_response, user, degree):
+        bspan_decoder_input = produce_bspan_decoder_input([previous_bspan], [previous_response], [user])
+        predicted_bspan = self.auto_regress(bspan_decoder_input, "bspan")
+
+        response_decoder_input = produce_response_decoder_input(previous_bspan, previous_response,
+                                                                user, predicted_bspan, degree)
+        predicted_response = self.auto_regress(response_decoder_input, "response")
+        return predicted_response
+
+    def evaluation(self, mode="dev", verbose=False):
+        dialogue_set = self.reader.dev if mode == "dev" else self.reader.test
+        predictions, targets = list(), list()
+        constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
+        for dialogue in dialogue_set[0:1]:
+            previous_bspan = [self.reader.vocab.encode(constraint_eos), self.reader.vocab.encode(request_eos)]
+            previous_response = [self.reader.vocab.encode(response_eos)]
+            for turn in dialogue:
+                dial_id, turn_num, user, response, bspan, u_len, m_len, degree = turn.values()
+                predicted_response = self.evaluate(previous_bspan, previous_response, user, degree)
+                if verbose:
+                    print("Predicted:", self.reader.vocab.sentence_decode(predicted_response))
+                    print("Real:", self.reader.vocab.sentence_decode(response))
+                predictions.append(predicted_response)
+                targets.append(response)
 
 
 if __name__ == "__main__":
@@ -548,4 +567,3 @@ if __name__ == "__main__":
     reader = CamRest676Reader()
     model = SeqModel(vocab_size=cfg.vocab_size, reader=reader)
     model.train_model()
-
