@@ -1,5 +1,4 @@
 import tensorflow as tf
-import tensorflow_hub as hub
 import time
 import numpy as np
 from reader import *
@@ -156,6 +155,25 @@ def point_wise_feed_forward_network(d_model, dff):
   ])
 
 
+def read_embeddings(reader, embeddings_file="data/glove.6B.{}d.txt", embedding_size=50):
+    """
+    :param reader: a dialogue dataset reader, where we will get words mapped to indices
+    :param embeddings_file: file path for glove embeddings
+    :return: dictionary of indices mapped to their glove embeddings
+    """
+    vocab_to_index = {reader.vocab.decode(id): id for id in range(cfg.vocab_size)}
+    embedding_matrix = np.zeros((cfg.vocab_size, embedding_size))
+    embeddings_file = embeddings_file.format(embedding_size)
+    with open(embeddings_file) as infile:
+        for line in infile:
+            word, coeffs = line.split(maxsplit=1)
+            if word in vocab_to_index:
+                word_index = vocab_to_index[word]
+                embedding_matrix[word_index] = np.fromstring(coeffs, 'f', sep=' ')
+
+    return embedding_matrix
+
+
 class EncoderLayer(tf.keras.layers.Layer):
     def __init__(self, d_model, num_heads, dff, rate=0.1):
         super(EncoderLayer, self).__init__()
@@ -220,14 +238,17 @@ class DecoderLayer(tf.keras.layers.Layer):
 
 class Encoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size,
-                 maximum_position_encoding, rate=0.1):
+                 maximum_position_encoding, rate=0.1, embeddings_matrix=None):
         super(Encoder, self).__init__()
 
         self.d_model = d_model
         self.num_layers = num_layers
 
-        # use 50 dim embedding from tfhub
-        self.embedding = hub_layer = hub.KerasLayer("https://tfhub.dev/google/nnlm-en-dim50-with-normalization/2")
+        if embeddings_matrix:
+            self.embedding = tf.keras.layers.Embedding(input_vocab_size, d_model,
+                                                       embeddings_initializer=tf.keras.initializers.Constant(embeddings_matrix))
+        else:
+            self.embedding = tf.keras.layers.Embedding(input_vocab_size, d_model)
 
         self.pos_encoding = positional_encoding(maximum_position_encoding,
                                                 self.d_model)
@@ -255,13 +276,18 @@ class Encoder(tf.keras.layers.Layer):
 
 class Decoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, d_model, num_heads, dff, target_vocab_size,
-                 maximum_position_encoding, rate=0.1):
+                 maximum_position_encoding, rate=0.1, embeddings_matrix=None):
         super(Decoder, self).__init__()
 
         self.d_model = d_model
         self.num_layers = num_layers
 
-        self.embedding = tf.keras.layers.Embedding(target_vocab_size, d_model)
+        if embeddings_matrix:
+            self.embedding = tf.keras.layers.Embedding(target_vocab_size, d_model,
+                                                       embeddings_initializer=tf.keras.initializers.Constant(embeddings_matrix))
+        else:
+            self.embedding = tf.keras.layers.Embedding(target_vocab_size, d_model)
+
         self.pos_encoding = positional_encoding(maximum_position_encoding, d_model)
 
         self.dec_layers = [DecoderLayer(d_model, num_heads, dff, rate)
@@ -292,17 +318,17 @@ class Decoder(tf.keras.layers.Layer):
 
 class Transformer(tf.keras.Model):
     def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size,
-                 target_vocab_size, pe_input, pe_target, rate=0.1):
+                 target_vocab_size, pe_input, pe_target, rate=0.1, embeddings_matrix=None):
         super(Transformer, self).__init__()
 
         self.encoder = Encoder(num_layers, d_model, num_heads, dff,
-                               input_vocab_size, pe_input, rate)
+                               input_vocab_size, pe_input, rate, embeddings_matrix)
 
         self.response_decoder = Decoder(num_layers, d_model, num_heads, dff,
-                               target_vocab_size, pe_target, rate)
+                               target_vocab_size, pe_target, rate, embeddings_matrix)
 
         self.bspan_decoder = Decoder(num_layers, d_model, num_heads, dff,
-                               target_vocab_size, pe_target, rate)
+                               target_vocab_size, pe_target, rate, embeddings_matrix)
 
         self.response_final = tf.keras.layers.Dense(target_vocab_size)
         self.bspan_final = tf.keras.layers.Dense(target_vocab_size)
@@ -361,7 +387,7 @@ def loss_function(real, pred):
 
 
 class SeqModel:
-    def __init__(self, vocab_size, num_layers=4, d_model=50, dff=512, num_heads=5, dropout_rate=0.1):
+    def __init__(self, vocab_size, num_layers=4, d_model=50, dff=512, num_heads=5, dropout_rate=0.1, reader=None):
         self.vocab_size = vocab_size
         input_vocab_size = vocab_size
         target_vocab_size = vocab_size
@@ -373,11 +399,18 @@ class SeqModel:
         self.bspan_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
         self.response_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
 
+        if reader:
+            print("Reading pre-trained word embeddings with {} dimensions".format(d_model))
+            embeddings_matrix = read_embeddings(reader, embedding_size=d_model)
+        else:
+            print("Initializing without pre-trained embeddings.")
+            embeddings_matrix=None
+
         self.transformer = Transformer(num_layers, d_model, num_heads, dff,
                                   input_vocab_size, target_vocab_size,
                                   pe_input=input_vocab_size,
                                   pe_target=target_vocab_size,
-                                  rate=dropout_rate)
+                                  rate=dropout_rate, embeddings_matrix=embeddings_matrix)
 
     @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
         tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
@@ -480,10 +513,11 @@ def tensorize(id_lists):
     return tf.cast(tensorized, dtype=tf.int32)
 
 
+# TODO change these functions so that they can take tensor input and not just list
 def produce_bspan_decoder_input(previous_bspan, previous_response, user_input):
     inputs =[]
     for counter, (x, y, z) in enumerate(zip(previous_bspan, previous_response, user_input)):
-        new_sample = x + y + z
+        new_sample = x + y + z  # TODO concatenation should be more readable than this
         inputs.append(new_sample)
     return tensorize(inputs)
 
@@ -498,6 +532,7 @@ if __name__ == "__main__":
     cfg.init_handler(ds)
     cfg.dataset = ds.split('-')[-1]
     reader = CamRest676Reader()
+    embeddings = read_embeddings(reader)
     model = SeqModel(vocab_size=cfg.vocab_size)
     prev_bspan_eos, bspan_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
     epochs = 10
@@ -518,7 +553,9 @@ if __name__ == "__main__":
                 bspan_decoder_input = produce_bspan_decoder_input(previous_bspan, previous_response, user)
                 response_decoder_input = produce_response_decoder_input(previous_bspan, previous_response,
                                                                         user, bspan_received, degree)
-                # TODO: the response decoding only uses the response decoder, not the encoder
+                # TODO write cleaner evaluate and train functions
+
+                # TODO actually save the models, keeping track of the best one
 
                 # training the model
                 model.train_step_bspan(bspan_decoder_input, target_bspan)
