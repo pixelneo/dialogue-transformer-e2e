@@ -1,4 +1,5 @@
 import tensorflow as tf
+import tensorflow_hub as hub
 import time
 import numpy as np
 from reader import *
@@ -225,7 +226,9 @@ class Encoder(tf.keras.layers.Layer):
         self.d_model = d_model
         self.num_layers = num_layers
 
-        self.embedding = tf.keras.layers.Embedding(input_vocab_size, d_model) # TODO load the glove embeddings
+        # use 50 dim embedding from tfhub
+        self.embedding = hub_layer = hub.KerasLayer("https://tfhub.dev/google/nnlm-en-dim50-with-normalization/2")
+
         self.pos_encoding = positional_encoding(maximum_position_encoding,
                                                 self.d_model)
 
