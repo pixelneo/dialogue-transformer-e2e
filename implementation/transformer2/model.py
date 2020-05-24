@@ -523,6 +523,9 @@ def main_function(train_sequicity=True):
     model = SequicityModel(encoder, bspan_decoder, response_decoder, params, r)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
+    optimizer_resp = torch.optim.Adam(model.response_decoder.parameters(), lr=params['lr'])
+    optimizer_bspan = torch.optim.Adam(model.bspan_decoder.parameters(), lr=params['lr'])
+    optimizer_enc = torch.optim.Adam(model.encoder.parameters(), lr=params['lr'])
     criterion = nn.CrossEntropyLoss()
 
     if train_sequicity:
@@ -544,7 +547,7 @@ def main_function(train_sequicity=True):
                     r2 = torch.cat([response_, torch.zeros((22, out.size(1)), dtype=torch.int64)])
                     loss = criterion(out.view(-1, params['ntoken']), r2.view(-1))
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+                    # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
                     optimizer.step()
 
                     print(loss)
@@ -575,6 +578,7 @@ def main_function(train_sequicity=True):
     else: # test the best model
         model.load_state_dict(torch.load("models/best_model.pt"))
         model.eval()
+        print(model.parameters())
         iterator = r.mini_batch_iterator('test') 
         total_loss = 0.0
         softmax = torch.nn.Softmax(-1)
