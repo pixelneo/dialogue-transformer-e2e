@@ -410,7 +410,7 @@ def produce_response_decoder_input(previous_bspan, previous_response, user_input
 
 
 class SeqModel:
-    def __init__(self, vocab_size, num_layers=4, d_model=50, dff=512, num_heads=5, dropout_rate=0.1, reader=None):
+    def __init__(self, vocab_size, num_layers=3, d_model=50, dff=512, num_heads=5, dropout_rate=0.1, reader=None):
         self.vocab_size = vocab_size + 1
         input_vocab_size = vocab_size + 1
         target_vocab_size = vocab_size + 1
@@ -436,8 +436,8 @@ class SeqModel:
                                   pe_target=target_vocab_size,
                                   rate=dropout_rate, embeddings_matrix=embeddings_matrix)
 
-    #@tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-    #    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+    @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
     def train_step_bspan(self, inp, tar):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
@@ -458,8 +458,8 @@ class SeqModel:
 
         self.bspan_accuracy(tar_real, predictions)
 
-    #@tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-    #    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+    @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
     def train_step_response(self, inp, tar):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
@@ -493,7 +493,8 @@ class SeqModel:
                         previous_bspan = [[self.reader.vocab.encode(constraint_eos),
                                            self.reader.vocab.encode(request_eos)] for i in range(batch_size)]
                         previous_response = [[self.reader.vocab.encode(response_eos)] for i in range(batch_size)]
-                    target_bspan, target_response = tensorize(bspan_received), tensorize(response)
+                    target_bspan = tensorize([[cfg.vocab_size] + x for x in bspan_received])
+                    target_response = tensorize([[cfg.vocab_size] + x for x in response])
 
                     bspan_decoder_input = produce_bspan_decoder_input(previous_bspan, previous_response, user)
                     response_decoder_input = produce_response_decoder_input(previous_bspan, previous_response,
@@ -517,10 +518,8 @@ class SeqModel:
         end_token_id = self.reader.vocab.encode("EOS_Z2") if decoder == "bspan" else self.reader.vocab.encode("EOS_M")
 
         for i in range(MAX_LENGTH):
-            #print(self.reader.vocab.sentence_decode(output[0].numpy()))
             enc_padding_mask, combined_mask, dec_padding_mask = create_masks(input_sequence, output)
 
-            # predictions.shape == (batch_size, seq_len, vocab_size)
             if decoder == "bspan":
                 predictions, attention_weights = self.transformer.bspan(input_sequence, output, False,
                                                                         enc_padding_mask, combined_mask,
@@ -558,6 +557,7 @@ class SeqModel:
             previous_response = [self.reader.vocab.encode(response_eos)]
             for turn in dialogue[0:1]:
                 dial_id, turn_num, user, response, bspan, u_len, m_len, degree = turn.values()
+                response, bspan = [cfg.vocab_size] + response, [cfg.vocab_size] + bspan
                 predicted_response = self.evaluate(previous_bspan, previous_response, user, degree)
                 if verbose:
                     print("Predicted:", self.reader.vocab.sentence_decode(predicted_response.numpy()))
@@ -567,9 +567,14 @@ class SeqModel:
 
 
 if __name__ == "__main__":
+    # TODO make the embeddings optional and clean up the reader logic in the model creation
+    # TODO model saving, with parameters processing in saving and loading
+    # TODO try with different setups (number of heads, number of layers)
+    # TODO Evaluation output should be written/plotted/run independently
+    # TODO see if multiple optimizers necessary for training bspan and response batches
+    # TODO try copynet
     ds = "tsdf-camrest"
     cfg.init_handler(ds)
-    # TODO make sure start symbols are in the beginning of the training targets too, and everywhere else they should be
     cfg.dataset = ds.split('-')[-1]
     reader = CamRest676Reader()
     model = SeqModel(vocab_size=cfg.vocab_size, reader=reader)
