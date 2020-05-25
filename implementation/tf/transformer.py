@@ -162,7 +162,7 @@ def read_embeddings(reader, embeddings_file="data/glove.6B.{}d.txt", embedding_s
     :return: dictionary of indices mapped to their glove embeddings
     """
     vocab_to_index = {reader.vocab.decode(id): id for id in range(cfg.vocab_size)}
-    embedding_matrix = np.zeros((cfg.vocab_size, embedding_size))
+    embedding_matrix = np.zeros((cfg.vocab_size + 1, embedding_size))
     embeddings_file = embeddings_file.format(embedding_size)
     with open(embeddings_file) as infile:
         for line in infile:
@@ -394,24 +394,26 @@ def tensorize(id_lists):
 # TODO change these functions so that they can take tensor input and not just list
 def produce_bspan_decoder_input(previous_bspan, previous_response, user_input):
     inputs =[]
+    start_symbol = [cfg.vocab_size]
     for counter, (x, y, z) in enumerate(zip(previous_bspan, previous_response, user_input)):
-        new_sample = x + y + z  # TODO concatenation should be more readable than this
-        print(x,y,z)
-        print(new_sample)
+        new_sample = start_symbol + x + y + z  # TODO concatenation should be more readable than this
         inputs.append(new_sample)
     return tensorize(inputs)
 
 
 def produce_response_decoder_input(previous_bspan, previous_response, user_input, bspan, kb):
-    inputs = [a + b + c + d + e for a, b, c, d, e in zip(previous_bspan, previous_response, user_input, bspan, kb)]
+    start_symbol = [cfg.vocab_size]
+    inputs = []
+    for a, b, c, d, e in zip(previous_bspan, previous_response, user_input, bspan, kb):
+        inputs.append(start_symbol + a + b + c + d + e)
     return tensorize(inputs)
 
 
 class SeqModel:
     def __init__(self, vocab_size, num_layers=4, d_model=50, dff=512, num_heads=5, dropout_rate=0.1, reader=None):
-        self.vocab_size = vocab_size
-        input_vocab_size = vocab_size
-        target_vocab_size = vocab_size
+        self.vocab_size = vocab_size + 1
+        input_vocab_size = vocab_size + 1
+        target_vocab_size = vocab_size + 1
 
         self.learning_rate = CustomSchedule(d_model)
         self.optimizer = tf.keras.optimizers.Adam(self.learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
@@ -434,8 +436,8 @@ class SeqModel:
                                   pe_target=target_vocab_size,
                                   rate=dropout_rate, embeddings_matrix=embeddings_matrix)
 
-    @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+    #@tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    #    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
     def train_step_bspan(self, inp, tar):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
@@ -456,8 +458,8 @@ class SeqModel:
 
         self.bspan_accuracy(tar_real, predictions)
 
-    @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+    #@tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    #    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
     def train_step_response(self, inp, tar):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
@@ -505,13 +507,17 @@ class SeqModel:
                     previous_bspan = bspan_received
                     previous_response = response
             print("Completed epoch #{} of {}".format(epoch + 1, epochs))
+            self.evaluation(verbose=True)
 
     def auto_regress(self, input_sequence, decoder, MAX_LENGTH=256):
         assert decoder in ["bspan", "response"]
-        output = tf.zeros([0,1], dtype=tf.int32)
+        decoder_input = [cfg.vocab_size]
+        output = tf.expand_dims(decoder_input, 0)
+
         end_token_id = self.reader.vocab.encode("EOS_Z2") if decoder == "bspan" else self.reader.vocab.encode("EOS_M")
 
         for i in range(MAX_LENGTH):
+            #print(self.reader.vocab.sentence_decode(output[0].numpy()))
             enc_padding_mask, combined_mask, dec_padding_mask = create_masks(input_sequence, output)
 
             # predictions.shape == (batch_size, seq_len, vocab_size)
@@ -536,11 +542,11 @@ class SeqModel:
 
     def evaluate(self, previous_bspan, previous_response, user, degree):
         bspan_decoder_input = produce_bspan_decoder_input([previous_bspan], [previous_response], [user])
-        predicted_bspan = self.auto_regress(bspan_decoder_input, "bspan")
+        predicted_bspan, _ = self.auto_regress(bspan_decoder_input, "bspan")
 
-        response_decoder_input = produce_response_decoder_input(previous_bspan, previous_response,
-                                                                user, predicted_bspan, degree)
-        predicted_response = self.auto_regress(response_decoder_input, "response")
+        response_decoder_input = produce_response_decoder_input([previous_bspan], [previous_response],
+                                                                [user], [list(predicted_bspan.numpy())], [degree])
+        predicted_response, _ = self.auto_regress(response_decoder_input, "response")
         return predicted_response
 
     def evaluation(self, mode="dev", verbose=False):
@@ -550,11 +556,11 @@ class SeqModel:
         for dialogue in dialogue_set[0:1]:
             previous_bspan = [self.reader.vocab.encode(constraint_eos), self.reader.vocab.encode(request_eos)]
             previous_response = [self.reader.vocab.encode(response_eos)]
-            for turn in dialogue:
+            for turn in dialogue[0:1]:
                 dial_id, turn_num, user, response, bspan, u_len, m_len, degree = turn.values()
                 predicted_response = self.evaluate(previous_bspan, previous_response, user, degree)
                 if verbose:
-                    print("Predicted:", self.reader.vocab.sentence_decode(predicted_response))
+                    print("Predicted:", self.reader.vocab.sentence_decode(predicted_response.numpy()))
                     print("Real:", self.reader.vocab.sentence_decode(response))
                 predictions.append(predicted_response)
                 targets.append(response)
@@ -563,6 +569,7 @@ class SeqModel:
 if __name__ == "__main__":
     ds = "tsdf-camrest"
     cfg.init_handler(ds)
+    # TODO make sure start symbols are in the beginning of the training targets too, and everywhere else they should be
     cfg.dataset = ds.split('-')[-1]
     reader = CamRest676Reader()
     model = SeqModel(vocab_size=cfg.vocab_size, reader=reader)
