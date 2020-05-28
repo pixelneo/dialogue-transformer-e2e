@@ -1,0 +1,4 @@
+parameters: ['num_layers', 'dim_ff', 'num_heads']
+num_layers: [2, 3, 4]
+dim_ff: [256, 512]
+num_heads: [4, 6, 8, 10]
