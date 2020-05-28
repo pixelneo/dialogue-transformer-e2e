@@ -16,11 +16,11 @@ def load_params(path):
     """
     def _params(p_names, it):
         for p_set in it:
-             yield dict(zip(p_names, p_set[0]))
+             yield dict(zip(p_names, p_set))
 
     with open(path, 'r') as f:
         obj = yaml.safe_load(f)
-    it = itertools.product([obj[p] for p in obj['parameters']])
+    it = itertools.product(*[obj[p] for p in obj['parameters']])
     return obj['parameters'], _params(obj['parameters'], it)
 
 
@@ -39,7 +39,8 @@ if __name__ == "__main__":
 
     for params in it:  # iterate over all possible parameter combinations
         neptune.create_experiment(name='parameter_search', params=params)
+        print(params)
 
-        model = SeqModel(vocab_size=cfg.vocab_size, reader=reader, num_layers=params['num_layers'], dff=params['dim_ff'], num_heads=['num_heads'] )
+        model = SeqModel(vocab_size=cfg.vocab_size, reader=reader, num_layers=params['num_layers'], dff=params['dim_ff'], num_heads=params['num_heads'] )
         model.train_model(log=True)
 
