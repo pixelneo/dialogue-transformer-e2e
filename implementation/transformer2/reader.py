@@ -4,6 +4,8 @@ import pickle
 from config import global_config as cfg
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
+from torch.autograd import Variable
+import torch
 import logging
 import random
 import os
@@ -85,6 +87,7 @@ class _ReaderBase:
                 self._absolute_add_item('<go>')  # 1
                 self._absolute_add_item('<unk>')  # 2
                 self._absolute_add_item('<go2>')  # 3
+                self._absolute_add_item('<pad2>')  # 4 this is for padding bspan from response
 
         def load_vocab(self, vocab_path):
             f = open(vocab_path, 'rb')
@@ -119,12 +122,16 @@ class _ReaderBase:
             return [self.sentence_decode(_, eos) + '\n' for _ in l]
 
         def encode(self, item):
+            """ Return index of `item` if it is in dictionary.
+            Index of `<unk>` is returned if `item` is not found."""
             if item in self._item2idx:
                 return self._item2idx[item]
             else:
                 return self._item2idx['<unk>']
 
         def decode(self, idx):
+            """ Return word for `idx` if it exists,
+            ITEM_x where x=idx-vocab_size is returned if idx>vocab_size. """
             if not isinstance(idx, int):
                 idx = idx.item()
 
@@ -160,6 +167,8 @@ class _ReaderBase:
         # for k in del_l:
         #    turn_bucket.pop(k)
         return turn_bucket
+
+    # def _donot_bucket(self, encoded_data)
 
     def _mark_batch_as_supervised(self, all_batches):
         supervised_num = int(len(all_batches) * cfg.spv_proportion / 100)
@@ -852,3 +861,59 @@ def get_glove_matrix(vocab, initial_embedding_np):
     logging.info('%d known embedding. old mean: %f new mean %f, old std %f new std %f' % (cnt, old_avg, new_avg, old_std, new_std))
     return vec_array
 
+def cuda_(var):
+    return var.cuda() if cfg.cuda else var
+
+
+
+def _convert_batch(py_batch, reader_, prev_z_py=None):
+    """ This is from the orig `model.py`.
+    It convert batch which is in python data structures to numpy, torch.
+    Also it does padding and other things"""
+    u_input_py = py_batch['user']
+    u_len_py = py_batch['u_len']
+    kw_ret = {}
+    if cfg.prev_z_method == 'concat' and prev_z_py is not None:
+        for i in range(len(u_input_py)):
+            eob = reader_.vocab.encode('EOS_Z2')
+            if eob in prev_z_py[i] and prev_z_py[i].index(eob) != len(prev_z_py[i]) - 1:
+                idx = prev_z_py[i].index(eob)
+                u_input_py[i] = prev_z_py[i][:idx + 1] + u_input_py[i]
+            else:
+                u_input_py[i] = prev_z_py[i] + u_input_py[i]
+            u_len_py[i] = len(u_input_py[i])
+            for j, word in enumerate(prev_z_py[i]):
+                if word >= cfg.vocab_size:
+                    prev_z_py[i][j] = 2 #unk
+    elif cfg.prev_z_method == 'separate' and prev_z_py is not None:
+        for i in range(len(prev_z_py)):
+            eob = reader_.vocab.encode('EOS_Z2')
+            if eob in prev_z_py[i] and prev_z_py[i].index(eob) != len(prev_z_py[i]) - 1:
+                idx = prev_z_py[i].index(eob)
+                prev_z_py[i] = prev_z_py[i][:idx + 1]
+            for j, word in enumerate(prev_z_py[i]):
+                if word >= cfg.vocab_size:
+                    prev_z_py[i][j] = 2 #unk
+        prev_z_input_np = pad_sequences(prev_z_py, cfg.max_ts, padding='post', truncating='pre').transpose((1, 0))
+        prev_z_len = np.array([len(_) for _ in prev_z_py])
+        prev_z_input = cuda_(Variable(torch.from_numpy(prev_z_input_np).long()))
+        kw_ret['prev_z_len'] = prev_z_len
+        kw_ret['prev_z_input'] = prev_z_input
+        kw_ret['prev_z_input_np'] = prev_z_input_np
+
+    degree_input_np = np.array(py_batch['degree'])
+    u_input_np = pad_sequences(u_input_py, cfg.max_ts, padding='post', truncating='pre')#.transpose((1, 0))
+    z_input_np = pad_sequences(py_batch['bspan'], padding='post')#.transpose((1, 0))
+    m_input_np = pad_sequences(py_batch['response'], cfg.max_ts, padding='post', truncating='post')#.transpose((1, 0))
+
+    u_len = np.array(u_len_py)
+    m_len = np.array(py_batch['m_len'])
+
+    degree_input = cuda_(Variable(torch.from_numpy(degree_input_np).float()))
+    u_input = cuda_(Variable(torch.from_numpy(u_input_np).long()))
+    z_input = cuda_(Variable(torch.from_numpy(z_input_np).long()))
+    m_input = cuda_(Variable(torch.from_numpy(m_input_np).long()))
+
+    kw_ret['z_input_np'] = z_input_np
+
+    return u_input, u_input_np, z_input, m_input, m_input_np,u_len, m_len, degree_input, kw_ret

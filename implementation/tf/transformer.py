@@ -3,6 +3,12 @@ import time
 import numpy as np
 from reader import *
 import os
+import warnings
+
+try:
+    import neptune
+except ImportError:
+    warnings.warn('neptune module is not installed (used for logging)', ImportWarning)
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
@@ -520,7 +526,7 @@ class SeqModel:
 
         self.response_accuracy(tar_real, predictions)
 
-    def train_model(self, epochs=20):
+    def train_model(self, epochs=20, log=False):
         # TODO add a start token to all of these things and increase vocab size by one
         constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
         for epoch in range(epochs):
@@ -549,7 +555,7 @@ class SeqModel:
                     previous_bspan = bspan_received
                     previous_response = response
             print("Completed epoch #{} of {}".format(epoch + 1, epochs))
-            self.evaluation(verbose=True)
+            self.evaluation(verbose=True, log=log)
 
     def auto_regress(self, input_sequence, decoder, MAX_LENGTH=256):
         assert decoder in ["bspan", "response"]
@@ -589,7 +595,7 @@ class SeqModel:
         predicted_response, _ = self.auto_regress(response_decoder_input, "response")
         return predicted_response
 
-    def evaluation(self, mode="dev", verbose=False):
+    def evaluation(self, mode="dev", verbose=False, log=False):
         dialogue_set = self.reader.dev if mode == "dev" else self.reader.test
         predictions, targets = list(), list()
         constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
@@ -603,6 +609,10 @@ class SeqModel:
                 if verbose:
                     print("Predicted:", self.reader.vocab.sentence_decode(predicted_response.numpy()))
                     print("Real:", self.reader.vocab.sentence_decode(response))
+                if log:
+                    neptune.log_text('predicted', self.reader.vocab.sentence_decode(predicted_response.numpy()))
+                    neptune.log_text('real', self.reader.vocab.sentence_decode(response))
+
                 predictions.append(predicted_response)
                 targets.append(response)
 
@@ -612,8 +622,6 @@ if __name__ == "__main__":
     # TODO model saving, with parameters processing in saving and loading
     # TODO try with different setups (number of heads, number of layers)
     # TODO Evaluation output should be written/plotted/run independently
-    # TODO see if multiple optimizers necessary for training bspan and response batches
-    # TODO try copynet
     ds = "tsdf-camrest"
     cfg.init_handler(ds)
     cfg.dataset = ds.split('-')[-1]
