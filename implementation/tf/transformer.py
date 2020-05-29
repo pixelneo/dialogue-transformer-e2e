@@ -151,7 +151,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
 
         output = self.dense(concat_attention)  # (batch_size, seq_len_q, d_model)
 
-        return output, attention_weights
+        return output, attention_weights, scaled_attention
 
 
 def point_wise_feed_forward_network(d_model, dff):
@@ -194,7 +194,7 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.dropout2 = tf.keras.layers.Dropout(rate)
 
     def call(self, x, training, mask):
-        attn_output, _ = self.mha(x, x, x, mask)  # (batch_size, input_seq_len, d_model)
+        attn_output, _, _ = self.mha(x, x, x, mask)  # (batch_size, input_seq_len, d_model)
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(x + attn_output)  # (batch_size, input_seq_len, d_model)
 
@@ -226,11 +226,11 @@ class DecoderLayer(tf.keras.layers.Layer):
              look_ahead_mask, padding_mask):
         # enc_output.shape == (batch_size, input_seq_len, d_model)
 
-        attn1, attn_weights_block1 = self.mha1(x, x, x, look_ahead_mask)  # (batch_size, target_seq_len, d_model)
+        attn1, attn_weights_block1, _ = self.mha1(x, x, x, look_ahead_mask)  # (batch_size, target_seq_len, d_model)
         attn1 = self.dropout1(attn1, training=training)
         out1 = self.layernorm1(attn1 + x)
 
-        attn2, attn_weights_block2 = self.mha2(
+        attn2, attn_weights_block2, scaled_attention = self.mha2(
             enc_output, enc_output, out1, padding_mask)  # (batch_size, target_seq_len, d_model)
         attn2 = self.dropout2(attn2, training=training)
         out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
@@ -239,7 +239,7 @@ class DecoderLayer(tf.keras.layers.Layer):
         ffn_output = self.dropout3(ffn_output, training=training)
         out3 = self.layernorm3(ffn_output + out2)  # (batch_size, target_seq_len, d_model)
 
-        return out3, attn_weights_block1, attn_weights_block2
+        return out3, attn_weights_block1, attn_weights_block2, attn2
 
 
 class Encoder(tf.keras.layers.Layer):
@@ -282,9 +282,10 @@ class Encoder(tf.keras.layers.Layer):
 
 class Decoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, d_model, num_heads, dff, target_vocab_size,
-                 maximum_position_encoding, rate=0.1, embeddings_matrix=None):
+                 maximum_position_encoding, rate=0.1, copynet=False, embeddings_matrix=None):
         super(Decoder, self).__init__()
-
+        self.target_vocab_size = target_vocab_size
+        self.copynet = copynet
         self.d_model = d_model
         self.num_layers = num_layers
 
@@ -300,41 +301,76 @@ class Decoder(tf.keras.layers.Layer):
                            for _ in range(num_layers)]
         self.dropout = tf.keras.layers.Dropout(rate)
 
+        if self.copynet:
+            self.copy_network = tf.keras.Sequential([
+                tf.keras.layers.Dense(dff, activation='relu', input_shape=(None, d_model)),
+                tf.keras.layers.Dense(1)])  # (batch_size, seq_len, d_model)
+            self.gen_prob = tf.keras.layers.Dense(1, activation="sigmoid")
+
     def call(self, x, enc_output, training,
              look_ahead_mask, padding_mask):
         seq_len = tf.shape(x)[1]
         attention_weights = {}
+        initial_input = x
 
         x = self.embedding(x)  # (batch_size, target_seq_len, d_model)
+        embedded = x
         x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         x += self.pos_encoding[:, :seq_len, :]
 
         x = self.dropout(x, training=training)
 
         for i in range(self.num_layers):
-            x, block1, block2 = self.dec_layers[i](x, enc_output, training,
+            x, block1, block2, attn = self.dec_layers[i](x, enc_output, training,
                                                    look_ahead_mask, padding_mask)
 
             attention_weights['decoder_layer{}_block1'.format(i + 1)] = block1
             attention_weights['decoder_layer{}_block2'.format(i + 1)] = block2
 
+        if self.copynet:
+            p_gen = self.gen_prob(x)
+            copy_distribution = self.copy_network(attn)
+            try:
+                copy_distribution = tf.squeeze(copy_distribution, axis=1)
+            except tf.errors.InvalidArgumentError:
+                copy_distribution = tf.squeeze(copy_distribution)
+            copy_probs = tf.nn.softmax(copy_distribution)
+            if copy_probs.shape.ndims == 1:
+                copy_probs = tf.expand_dims(copy_probs, axis=0)
+            i1, i2 = tf.meshgrid(tf.range(initial_input.shape[0]),
+                                 tf.range(initial_input.shape[1]), indexing="ij")
+            i1 = tf.tile(i1[:, :, tf.newaxis], [1, 1, 1])
+            i2 = tf.tile(i2[:, :, tf.newaxis], [1, 1, 1])
+            # Create final indices
+            idx = tf.stack([i1, i2, tf.expand_dims(initial_input, axis=2)], axis=-1)
+            # Output shape
+            to_shape = [initial_input.shape[0], initial_input.shape[1], self.target_vocab_size]
+            # Get scattered tensor
+            output = tf.scatter_nd(idx, tf.expand_dims(copy_probs, axis=2), to_shape)
+            copy_logits = tf.reduce_sum(output, axis=1)
+        else:
+            p_gen = 0.
+            copy_logits = tf.zeros((initial_input.shape[0], self.target_vocab_size), dtype=x.dtype)
+        copy_logits = tf.tile(tf.expand_dims(copy_logits, axis=1), [1, x.shape[1], 1])
         # x.shape == (batch_size, target_seq_len, d_model)
-        return x, attention_weights
+        return x, attention_weights, p_gen, copy_logits
 
 
 class Transformer(tf.keras.Model):
     def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size,
-                 target_vocab_size, pe_input, pe_target, rate=0.1, embeddings_matrix=None):
+                 target_vocab_size, pe_input, pe_target, rate=0.1, copynet=False, embeddings_matrix=None):
         super(Transformer, self).__init__()
 
+        self.copynet = copynet
+
         self.encoder = Encoder(num_layers, d_model, num_heads, dff,
-                               input_vocab_size, pe_input, rate, embeddings_matrix)
+                               input_vocab_size, pe_input, rate, )
 
         self.response_decoder = Decoder(num_layers, d_model, num_heads, dff,
-                               target_vocab_size, pe_target, rate, embeddings_matrix)
+                               target_vocab_size, pe_target, rate, copynet, embeddings_matrix)
 
         self.bspan_decoder = Decoder(num_layers, d_model, num_heads, dff,
-                               target_vocab_size, pe_target, rate, embeddings_matrix)
+                               target_vocab_size, pe_target, rate, copynet, embeddings_matrix)
 
         self.response_final = tf.keras.layers.Dense(target_vocab_size)
         self.bspan_final = tf.keras.layers.Dense(target_vocab_size)
@@ -343,10 +379,12 @@ class Transformer(tf.keras.Model):
         enc_output = self.encoder(inp, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
 
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
-        dec_output, attention_weights = self.bspan_decoder(
+        dec_output, attention_weights, p_gen, copy_logits = self.bspan_decoder(
             tar, enc_output, training, look_ahead_mask, dec_padding_mask)
 
         bspan_output = self.response_final(dec_output)  # (batch_size, tar_seq_len, target_vocab_size)
+        if self.copynet:
+            bspan_output = p_gen * bspan_output + (1-p_gen) * copy_logits
 
         return bspan_output, attention_weights
 
@@ -354,10 +392,12 @@ class Transformer(tf.keras.Model):
         enc_output = self.encoder(inp, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
 
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
-        dec_output, attention_weights = self.response_decoder(
+        dec_output, attention_weights, p_gen, copy_logits = self.response_decoder(
             tar, enc_output, training, look_ahead_mask, dec_padding_mask)
 
         response_output = self.response_final(dec_output)  # (batch_size, tar_seq_len, target_vocab_size)
+        if self.copynet:
+            response_output = p_gen * response_output + (1-p_gen) * copy_logits
 
         return response_output, attention_weights
 
@@ -416,7 +456,8 @@ def produce_response_decoder_input(previous_bspan, previous_response, user_input
 
 
 class SeqModel:
-    def __init__(self, vocab_size, num_layers=3, d_model=50, dff=512, num_heads=5, dropout_rate=0.1, reader=None):
+    def __init__(self, vocab_size, num_layers=3, d_model=50, dff=512, num_heads=5, dropout_rate=0.1, copynet=False,
+                 reader=None):
         self.vocab_size = vocab_size + 1
         input_vocab_size = vocab_size + 1
         target_vocab_size = vocab_size + 1
@@ -440,10 +481,10 @@ class SeqModel:
                                   input_vocab_size, target_vocab_size,
                                   pe_input=input_vocab_size,
                                   pe_target=target_vocab_size,
-                                  rate=dropout_rate, embeddings_matrix=embeddings_matrix)
+                                  rate=dropout_rate, copynet=copynet, embeddings_matrix=embeddings_matrix)
 
-    @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+    #@tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    #    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
     def train_step_bspan(self, inp, tar):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
@@ -464,8 +505,8 @@ class SeqModel:
 
         self.bspan_accuracy(tar_real, predictions)
 
-    @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+    #@tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    #    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
     def train_step_response(self, inp, tar):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
@@ -581,11 +622,9 @@ if __name__ == "__main__":
     # TODO model saving, with parameters processing in saving and loading
     # TODO try with different setups (number of heads, number of layers)
     # TODO Evaluation output should be written/plotted/run independently
-    # TODO see if multiple optimizers necessary for training bspan and response batches
-    # TODO try copynet
     ds = "tsdf-camrest"
     cfg.init_handler(ds)
     cfg.dataset = ds.split('-')[-1]
     reader = CamRest676Reader()
-    model = SeqModel(vocab_size=cfg.vocab_size, reader=reader)
-    model.train_model(log=False)
+    model = SeqModel(vocab_size=cfg.vocab_size, copynet=True, reader=reader)
+    model.train_model()
