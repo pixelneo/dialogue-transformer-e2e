@@ -527,7 +527,7 @@ class SeqModel:
 
         self.response_accuracy(tar_real, predictions)
 
-    def train_model(self, epochs=20, log=False):
+    def train_model(self, epochs=20, log=False, max_sent=1):
         # TODO add a start token to all of these things and increase vocab size by one
         constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
         for epoch in range(epochs):
@@ -556,7 +556,7 @@ class SeqModel:
                     previous_bspan = bspan_received
                     previous_response = response
             print("Completed epoch #{} of {}".format(epoch + 1, epochs))
-            self.evaluation(verbose=True, log=log, use_metric=True)
+            self.evaluation(verbose=True, log=log, max_sent=max_sent, use_metric=True)
 
     def auto_regress(self, input_sequence, decoder, MAX_LENGTH=256):
         assert decoder in ["bspan", "response"]
@@ -619,7 +619,8 @@ class SeqModel:
         if use_metric:
             scorer = metric.BLEUScorer()
             bleu = scorer.score(zip((self.reader.vocab.sentence_decode(p.numpy()) for p in predictions), (self.reader.vocab.sentence_decode(t) for t in targets)))
-            print("Bleu: {:.4f}%".format(bleu*100))
+            if verbose:
+                print("Bleu: {:.4f}%".format(bleu*100))
             if log:
                 neptune.log_metric('bleu', bleu)
                 if max_sent >=100:
@@ -639,5 +640,3 @@ if __name__ == "__main__":
     reader = CamRest676Reader()
     model = SeqModel(vocab_size=cfg.vocab_size, copynet=True, reader=reader)
     model.train_model(log=False)
-    print('Final evaluation')
-    model.evaluation(verbose=True, log=False, max_sent=1000, use_metric=True)
