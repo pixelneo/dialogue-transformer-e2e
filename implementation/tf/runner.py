@@ -56,7 +56,7 @@ if __name__ == "__main__":
 
         model = SeqModel(vocab_size=cfg.vocab_size, reader=reader, num_layers=params['num_layers'], dff=params['dim_ff'], num_heads=params['num_heads'] )
         model.train_model(log=True)
-        model.evaluation(verbose=True, log=False, max_sent=1000, use_metric=True)
+        model.evaluation(verbose=True, log=True, max_sent=1000, use_metric=True)
         log_param(params)
         experiment.stop()
 

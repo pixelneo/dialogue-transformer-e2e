@@ -638,6 +638,6 @@ if __name__ == "__main__":
     cfg.dataset = ds.split('-')[-1]
     reader = CamRest676Reader()
     model = SeqModel(vocab_size=cfg.vocab_size, copynet=True, reader=reader)
-    model.train_model()
+    model.train_model(log=False)
     print('Final evaluation')
     model.evaluation(verbose=True, log=False, max_sent=1000, use_metric=True)
