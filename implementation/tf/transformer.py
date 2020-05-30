@@ -4,6 +4,7 @@ import numpy as np
 from reader import *
 import os
 import warnings
+import metric
 
 try:
     import neptune
@@ -555,7 +556,7 @@ class SeqModel:
                     previous_bspan = bspan_received
                     previous_response = response
             print("Completed epoch #{} of {}".format(epoch + 1, epochs))
-            self.evaluation(verbose=True, log=log)
+            self.evaluation(verbose=True, log=log, use_metric=True)
 
     def auto_regress(self, input_sequence, decoder, MAX_LENGTH=256):
         assert decoder in ["bspan", "response"]
@@ -595,14 +596,14 @@ class SeqModel:
         predicted_response, _ = self.auto_regress(response_decoder_input, "response")
         return predicted_response
 
-    def evaluation(self, mode="dev", verbose=False, log=False):
+    def evaluation(self, mode="dev", verbose=False, log=False, max_sent=1, use_metric=False):
         dialogue_set = self.reader.dev if mode == "dev" else self.reader.test
         predictions, targets = list(), list()
         constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
-        for dialogue in dialogue_set[0:1]:
+        for dialogue in dialogue_set[0:max_sent]:
             previous_bspan = [self.reader.vocab.encode(constraint_eos), self.reader.vocab.encode(request_eos)]
             previous_response = [self.reader.vocab.encode(response_eos)]
-            for turn in dialogue[0:1]:
+            for turn in dialogue[0:max_sent]:
                 dial_id, turn_num, user, response, bspan, u_len, m_len, degree = turn.values()
                 response, bspan = [cfg.vocab_size] + response, [cfg.vocab_size] + bspan
                 predicted_response = self.evaluate(previous_bspan, previous_response, user, degree)
@@ -615,6 +616,16 @@ class SeqModel:
 
                 predictions.append(predicted_response)
                 targets.append(response)
+        if use_metric:
+            scorer = metric.BLEUScorer()
+            bleu = scorer.score(zip((self.reader.vocab.sentence_decode(p.numpy()) for p in predictions), (self.reader.vocab.sentence_decode(t) for t in targets)))
+            print("Bleu: {:.4f}%".format(bleu*100))
+            if log:
+                neptune.log_metric('bleu', bleu)
+                if max_sent >=100:
+                    neptune.log_metric('bleu_final', bleu)
+
+
 
 
 if __name__ == "__main__":
@@ -628,3 +639,5 @@ if __name__ == "__main__":
     reader = CamRest676Reader()
     model = SeqModel(vocab_size=cfg.vocab_size, copynet=True, reader=reader)
     model.train_model()
+    print('Final evaluation')
+    model.evaluation(verbose=True, log=False, max_sent=1000, use_metric=True)
