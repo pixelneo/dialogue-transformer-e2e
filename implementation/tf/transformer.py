@@ -596,7 +596,7 @@ class SeqModel:
         predicted_response, _ = self.auto_regress(response_decoder_input, "response")
         return predicted_response
 
-    def evaluation(self, mode="dev", verbose=False, log=False, max_sent=1, max_turns=1 use_metric=False):
+    def evaluation(self, mode="dev", verbose=False, log=False, max_sent=1, max_turns=1, use_metric=False):
         dialogue_set = self.reader.dev if mode == "dev" else self.reader.test
         predictions, targets = list(), list()
         constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
@@ -614,7 +614,7 @@ class SeqModel:
                 predicted_decoded = self.reader.vocab.sentence_decode(predicted_response.numpy())
                 real_decoded = self.reader.vocab.sentence_decode(response)
 
-                real_decoded.append(real_decoded)
+                real_turns.append(real_decoded)
                 predicted_turns.append(predicted_decoded)
                 if verbose:
                     print("Predicted:", predicted_decoded)
@@ -623,8 +623,8 @@ class SeqModel:
                     neptune.log_text('predicted', self.reader.vocab.sentence_decode(predicted_response.numpy()))
                     neptune.log_text('real', self.reader.vocab.sentence_decode(response))
 
-            predictions.append(predicted_decoded)
-            targets.append(real_decoded)
+            predictions.append(predicted_turns)
+            targets.append(real_turns)
 
         if use_metric:
             # BLEU
@@ -636,10 +636,10 @@ class SeqModel:
 
             if verbose:
                 print("Bleu: {:.4f}%".format(bleu*100))
-                print("Bleu: {:.4f}%".format(f1*100))
+                print("F1: {:.4f}%".format(f1*100))
             if log:
                 neptune.log_metric('bleu', bleu)
-                neptune.log_metric('bleu', f1)
+                neptune.log_metric('f1', f1)
                 if max_sent >= 150:
                     neptune.log_metric('bleu_final', bleu)
                     neptune.log_metric('f1_final', f1)

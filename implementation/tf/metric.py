@@ -95,8 +95,6 @@ class BLEUScorer(object):
         for hyps, refs in parallel_corpus:
             hyps = [hyp.split() for hyp in hyps]
             refs = [ref.split() for ref in refs]
-            print(hyps)
-            print(refs)
             for hyp in hyps:
 
                 for i in range(4):
