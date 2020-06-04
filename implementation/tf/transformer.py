@@ -527,7 +527,7 @@ class SeqModel:
 
         self.response_accuracy(tar_real, predictions)
 
-    def train_model(self, epochs=20, log=False, max_sent=1):
+    def train_model(self, epochs=20, log=False, max_sent=1, max_turns=1):
         # TODO add a start token to all of these things and increase vocab size by one
         constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
         for epoch in range(epochs):
@@ -556,7 +556,7 @@ class SeqModel:
                     previous_bspan = bspan_received
                     previous_response = response
             print("Completed epoch #{} of {}".format(epoch + 1, epochs))
-            self.evaluation(verbose=True, log=log, max_sent=max_sent, use_metric=True)
+            self.evaluation(verbose=True, log=log, max_sent=max_sent, max_turns=max_turns, use_metric=True)
 
     def auto_regress(self, input_sequence, decoder, MAX_LENGTH=256):
         assert decoder in ["bspan", "response"]
@@ -596,29 +596,47 @@ class SeqModel:
         predicted_response, _ = self.auto_regress(response_decoder_input, "response")
         return predicted_response
 
-    def evaluation(self, mode="dev", verbose=False, log=False, max_sent=1, use_metric=False):
+    def evaluation(self, mode="dev", verbose=False, log=False, max_sent=1, max_turns=1 use_metric=False):
         dialogue_set = self.reader.dev if mode == "dev" else self.reader.test
         predictions, targets = list(), list()
         constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
         for dialogue in dialogue_set[0:max_sent]:
             previous_bspan = [self.reader.vocab.encode(constraint_eos), self.reader.vocab.encode(request_eos)]
             previous_response = [self.reader.vocab.encode(response_eos)]
-            for turn in dialogue[0:max_sent]:
+
+            real_turns = []
+            predicted_turns = []
+            for turn in dialogue[0:max_turns]:
                 dial_id, turn_num, user, response, bspan, u_len, m_len, degree = turn.values()
                 response, bspan = [cfg.vocab_size] + response, [cfg.vocab_size] + bspan
                 predicted_response = self.evaluate(previous_bspan, previous_response, user, degree)
+
+                predicted_decoded = self.reader.vocab.sentence_decode(predicted_response.numpy())
+                real_decoded = self.reader.vocab.sentence_decode(response)
+
+                real_decoded.append(real_decoded)
+                predicted_turns.append(predicted_decoded)
                 if verbose:
-                    print("Predicted:", self.reader.vocab.sentence_decode(predicted_response.numpy()))
-                    print("Real:", self.reader.vocab.sentence_decode(response))
+                    print("Predicted:", predicted_decoded)
+                    print("Real:", real_decoded)
                 if log:
                     neptune.log_text('predicted', self.reader.vocab.sentence_decode(predicted_response.numpy()))
                     neptune.log_text('real', self.reader.vocab.sentence_decode(response))
 
-                predictions.append(predicted_response)
-                targets.append(response)
+            predictions.append(predicted_decoded)
+            targets.append(real_decoded)
+
         if use_metric:
+            # BLEU
             scorer = metric.BLEUScorer()
-            bleu = scorer.score(zip((self.reader.vocab.sentence_decode(p.numpy()) for p in predictions), (self.reader.vocab.sentence_decode(t) for t in targets)))
+            bleu = scorer.score(zip((self.reader.vocab.sentence_decode(p.numpy()) for turn in predictions), (self.reader.vocab.sentence_decode(t) for t in targets)))
+
+            # Sucess F1
+            #TODO
+            # metric.success_f1_metric(
+
+
+
             if verbose:
                 print("Bleu: {:.4f}%".format(bleu*100))
             if log:

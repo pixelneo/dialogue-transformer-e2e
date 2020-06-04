@@ -46,6 +46,35 @@ def setsim(a,b):
     return setsub(a,b) and setsub(b,a)
 
 
+def success_f1_metric(self, real, generated, sub='successf1'):
+    dials = self.pack_dial(data)
+    tp,fp,fn = 0,0,0
+    for dial_id in dials:
+        truth_req, gen_req = set(),set()
+        dial = dials[dial_id]
+        for turn_num, turn in enumerate(dial):
+            gen_response_token = turn['generated_response'].split()
+            response_token = turn['response'].split()
+            for idx, w in enumerate(gen_response_token):
+                if w.endswith('SLOT') and w != 'SLOT':
+                    gen_req.add(w.split('_')[0])
+            for idx, w in enumerate(response_token):
+                if w.endswith('SLOT') and w != 'SLOT':
+                    truth_req.add(w.split('_')[0])
+
+        gen_req.discard('name')
+        truth_req.discard('name')
+        for req in gen_req:
+            if req in truth_req:
+                tp += 1
+            else:
+                fp += 1
+        for req in truth_req:
+            if req not in gen_req:
+                fn += 1
+    precision, recall = tp / (tp + fp + 1e-8), tp / (tp + fn + 1e-8)
+    f1 = 2 * precision * recall / (precision + recall + 1e-8)
+    return f1
 
 class BLEUScorer(object):
     ## BLEU score calculator via GentScorer interface
@@ -65,8 +94,10 @@ class BLEUScorer(object):
 
         # accumulate ngram statistics
         for hyps, refs in parallel_corpus:
-            # hyps = [hyp.split() for hyp in hyps]
-            # refs = [ref.split() for ref in refs]
+            hyps = [hyp.split() for hyp in hyps]
+            refs = [ref.split() for ref in refs]
+            print(hyps)
+            print(refs)
             for hyp in hyps:
 
                 for i in range(4):
