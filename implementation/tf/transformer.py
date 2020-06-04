@@ -629,20 +629,20 @@ class SeqModel:
         if use_metric:
             # BLEU
             scorer = metric.BLEUScorer()
-            bleu = scorer.score(zip((self.reader.vocab.sentence_decode(p.numpy()) for turn in predictions), (self.reader.vocab.sentence_decode(t) for t in targets)))
+            bleu = scorer.score(zip(predictions, targets))
 
             # Sucess F1
-            #TODO
-            # metric.success_f1_metric(
-
-
+            f1 = metric.success_f1_metric(targets, predictions)
 
             if verbose:
                 print("Bleu: {:.4f}%".format(bleu*100))
+                print("Bleu: {:.4f}%".format(f1*100))
             if log:
                 neptune.log_metric('bleu', bleu)
-                if max_sent >=100:
+                neptune.log_metric('bleu', f1)
+                if max_sent >= 150:
                     neptune.log_metric('bleu_final', bleu)
+                    neptune.log_metric('f1_final', f1)
 
 
 

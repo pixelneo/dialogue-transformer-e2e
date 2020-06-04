@@ -46,15 +46,14 @@ def setsim(a,b):
     return setsub(a,b) and setsub(b,a)
 
 
-def success_f1_metric(self, real, generated, sub='successf1'):
-    dials = self.pack_dial(data)
+def success_f1_metric(real, generated, sub='successf1'):
     tp,fp,fn = 0,0,0
-    for dial_id in dials:
+    for hyps, refs in zip(generated, real):
         truth_req, gen_req = set(),set()
-        dial = dials[dial_id]
-        for turn_num, turn in enumerate(dial):
-            gen_response_token = turn['generated_response'].split()
-            response_token = turn['response'].split()
+        # dial = dials[dial_id]
+        for turn_hyp, turn_ref in zip(hyps, refs):
+            gen_response_token = turn_hyp.split()
+            response_token = turn_ref.split()
             for idx, w in enumerate(gen_response_token):
                 if w.endswith('SLOT') and w != 'SLOT':
                     gen_req.add(w.split('_')[0])
