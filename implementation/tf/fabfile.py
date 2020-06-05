@@ -24,13 +24,15 @@ for i, params in enumerate(parameters):
 @task
 def run(ctx):
     for server, tasks in server2task.items():
-        counter = 2
+        counter = 5
         while counter > 0:
             try:
                 c = Connection(server, user=user, connect_kwargs={'password':password})
-                command = ' && '.join(['python run.py \'{}\' &> /dev/null'.format(str(p).replace('\'','"')) for p in tasks])
-                print(command)
-                c.run('. .bash_profile && cd tfdiag && {}'.format(command), disown=True)
+                make_command = lambda x, lst: ' && '.join(['python run.py \'{}\' &> /dev/null'.format(str(p).replace('\'','"')) for p in lst[x::3]])
+                for z in range(3):
+                    command = make_command(z, tasks)
+                    c.run('. .bash_profile && cd tfdiag && {}'.format(command), disown=True)
+                    print(command)
                 counter=0
                 print('... run')
             except Exception as e:
@@ -39,7 +41,7 @@ def run(ctx):
                 counter = counter - 1
                 if counter == 0:
                     raise TimeoutError('ERROR: cannot connect to server {}'.format(server))
-                time.sleep(1)
+                time.sleep(2)
     print('DONE')
 
 
