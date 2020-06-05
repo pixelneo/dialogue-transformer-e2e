@@ -10,11 +10,11 @@ from runner import *
 password = os.environ['FAB_PWD']
 user = os.environ['FAB_USR']
 
-servers = ['u-pl{}.ms.mff.cuni.cz'.format(i) for i in range(1,3)]
+servers = ['u-pl{}.ms.mff.cuni.cz'.format(i) for i in range(1,21)]
 
 
 _, parameters = load_params('params.yaml')
-parameters = list(parameters)[:3]
+# parameters = list(parameters)[:3]
 
 server2task = dict(((s, []) for s in servers))
 for i, params in enumerate(parameters):
