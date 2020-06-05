@@ -4,6 +4,7 @@ import numpy as np
 from reader import *
 import os
 import warnings
+import metric
 
 try:
     import neptune
@@ -404,7 +405,7 @@ class Transformer(tf.keras.Model):
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
-    def __init__(self, d_model, warmup_steps=4000):
+    def __init__(self, d_model, warmup_steps=4000):   # TODO question: why 4000?, can it change?
         super(CustomSchedule, self).__init__()
 
         self.d_model = d_model
@@ -458,12 +459,12 @@ def produce_response_decoder_input(previous_bspan, previous_response, user_input
 
 class SeqModel:
     def __init__(self, vocab_size, num_layers=3, d_model=50, dff=512, num_heads=5, dropout_rate=0.1, copynet=False,
-                 reader=None):
+                 reader=None, warmup_steps=4000):
         self.vocab_size = vocab_size + 1
         input_vocab_size = vocab_size + 1
         target_vocab_size = vocab_size + 1
 
-        self.learning_rate = CustomSchedule(d_model)
+        self.learning_rate = CustomSchedule(d_model, warmup_steps)
         self.optimizer = tf.keras.optimizers.Adam(self.learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
         self.bspan_loss = tf.keras.metrics.Mean(name='train_loss')
         self.response_loss = tf.keras.metrics.Mean(name='train_loss')
@@ -527,7 +528,7 @@ class SeqModel:
 
         self.response_accuracy(tar_real, predictions)
 
-    def train_model(self, epochs=20, log=False):
+    def train_model(self, epochs=20, log=False, max_sent=1, max_turns=1):
         # TODO add a start token to all of these things and increase vocab size by one
         constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
         for epoch in range(epochs):
@@ -556,7 +557,7 @@ class SeqModel:
                     previous_bspan = bspan_received
                     previous_response = response
             print("Completed epoch #{} of {}".format(epoch + 1, epochs))
-            self.evaluation(verbose=True, log=log)
+            self.evaluation(verbose=True, log=log, max_sent=max_sent, max_turns=max_turns, use_metric=True)
 
     def auto_regress(self, input_sequence, decoder, MAX_LENGTH=256):
         assert decoder in ["bspan", "response"]
@@ -596,26 +597,55 @@ class SeqModel:
         predicted_response, _ = self.auto_regress(response_decoder_input, "response")
         return predicted_response
 
-    def evaluation(self, mode="dev", verbose=False, log=False):
+    def evaluation(self, mode="dev", verbose=False, log=False, max_sent=1, max_turns=1, use_metric=False):
         dialogue_set = self.reader.dev if mode == "dev" else self.reader.test
         predictions, targets = list(), list()
         constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
-        for dialogue in dialogue_set[0:1]:
+        for dialogue in dialogue_set[0:max_sent]:
             previous_bspan = [self.reader.vocab.encode(constraint_eos), self.reader.vocab.encode(request_eos)]
             previous_response = [self.reader.vocab.encode(response_eos)]
-            for turn in dialogue[0:1]:
+
+            real_turns = []
+            predicted_turns = []
+            for turn in dialogue[0:max_turns]:
                 dial_id, turn_num, user, response, bspan, u_len, m_len, degree = turn.values()
                 response, bspan = [cfg.vocab_size] + response, [cfg.vocab_size] + bspan
                 predicted_response = self.evaluate(previous_bspan, previous_response, user, degree)
+
+                predicted_decoded = self.reader.vocab.sentence_decode(predicted_response.numpy())
+                real_decoded = self.reader.vocab.sentence_decode(response)
+
+                real_turns.append(real_decoded)
+                predicted_turns.append(predicted_decoded)
                 if verbose:
-                    print("Predicted:", self.reader.vocab.sentence_decode(predicted_response.numpy()))
-                    print("Real:", self.reader.vocab.sentence_decode(response))
+                    print("Predicted:", predicted_decoded)
+                    print("Real:", real_decoded)
                 if log:
                     neptune.log_text('predicted', self.reader.vocab.sentence_decode(predicted_response.numpy()))
                     neptune.log_text('real', self.reader.vocab.sentence_decode(response))
 
-                predictions.append(predicted_response)
-                targets.append(response)
+            predictions.append(predicted_turns)
+            targets.append(real_turns)
+
+        if use_metric:
+            # BLEU
+            scorer = metric.BLEUScorer()
+            bleu = scorer.score(zip(predictions, targets))
+
+            # Sucess F1
+            f1 = metric.success_f1_metric(targets, predictions)
+
+            if verbose:
+                print("Bleu: {:.4f}%".format(bleu*100))
+                print("F1: {:.4f}%".format(f1*100))
+            if log:
+                neptune.log_metric('bleu', bleu)
+                neptune.log_metric('f1', f1)
+                if max_sent >= 150:
+                    neptune.log_metric('bleu_final', bleu)
+                    neptune.log_metric('f1_final', f1)
+
+
 
 
 if __name__ == "__main__":
@@ -624,4 +654,4 @@ if __name__ == "__main__":
     cfg.dataset = ds.split('-')[-1]
     reader = CamRest676Reader()
     model = SeqModel(vocab_size=cfg.vocab_size, copynet=True, reader=reader)
-    model.train_model()
+    model.train_model(log=False)
