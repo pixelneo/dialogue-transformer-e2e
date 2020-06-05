@@ -529,7 +529,6 @@ class SeqModel:
         self.response_accuracy(tar_real, predictions)
 
     def train_model(self, epochs=20, log=False, max_sent=1, max_turns=1):
-        # TODO add a start token to all of these things and increase vocab size by one
         constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
         for epoch in range(epochs):
             data_iterator = self.reader.mini_batch_iterator('train')
@@ -644,8 +643,6 @@ class SeqModel:
                 if max_sent >= 150:
                     neptune.log_metric('bleu_final', bleu)
                     neptune.log_metric('f1_final', f1)
-
-
 
 
 if __name__ == "__main__":
