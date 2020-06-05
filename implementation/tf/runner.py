@@ -55,8 +55,8 @@ if __name__ == "__main__":
         print(params)
 
         model = SeqModel(vocab_size=cfg.vocab_size, reader=reader, num_layers=params['num_layers'], dff=params['dim_ff'], num_heads=params['num_heads'] )
-        model.train_model(log=True)
-        model.evaluation(verbose=True, log=True, max_sent=1000, use_metric=True)
+        model.train_model(log=True, max_sent=30, max_turns=30)
+        model.evaluation(verbose=True, log=True, max_sent=300, max_turns=30, use_metric=True)  # the dev set has 135 dialogs
         log_param(params)
         experiment.stop()
 

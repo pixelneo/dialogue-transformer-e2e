@@ -404,7 +404,7 @@ class Transformer(tf.keras.Model):
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
-    def __init__(self, d_model, warmup_steps=4000):
+    def __init__(self, d_model, warmup_steps=4000):   # TODO question: why 4000?, can it change?
         super(CustomSchedule, self).__init__()
 
         self.d_model = d_model
@@ -458,12 +458,12 @@ def produce_response_decoder_input(previous_bspan, previous_response, user_input
 
 class SeqModel:
     def __init__(self, vocab_size, num_layers=3, d_model=50, dff=512, num_heads=5, dropout_rate=0.1, copynet=False,
-                 reader=None):
+                 reader=None, warmup_steps=4000):
         self.vocab_size = vocab_size + 1
         input_vocab_size = vocab_size + 1
         target_vocab_size = vocab_size + 1
 
-        self.learning_rate = CustomSchedule(d_model)
+        self.learning_rate = CustomSchedule(d_model, warmup_steps)
         self.optimizer = tf.keras.optimizers.Adam(self.learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
         self.bspan_loss = tf.keras.metrics.Mean(name='train_loss')
         self.response_loss = tf.keras.metrics.Mean(name='train_loss')
