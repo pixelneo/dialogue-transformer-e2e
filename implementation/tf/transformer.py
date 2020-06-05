@@ -619,12 +619,6 @@ class SeqModel:
 
 
 if __name__ == "__main__":
-    # TODO copy distrib. for each dec inp tok
-
-    # TODO make the embeddings optional and clean up the reader logic in the model creation
-    # TODO model saving, with parameters processing in saving and loading
-    # TODO try with different setups (number of heads, number of layers)
-    # TODO Evaluation output should be written/plotted/run independently
     ds = "tsdf-camrest"
     cfg.init_handler(ds)
     cfg.dataset = ds.split('-')[-1]
