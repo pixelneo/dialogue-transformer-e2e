@@ -202,7 +202,7 @@ class EncoderLayer(tf.keras.layers.Layer):
         ffn_output = self.dropout2(ffn_output, training=training)
         out2 = self.layernorm2(out1 + ffn_output)  # (batch_size, input_seq_len, d_model)
 
-        return out2
+        return out2, attn_output
 
 
 class DecoderLayer(tf.keras.layers.Layer):
@@ -275,9 +275,9 @@ class Encoder(tf.keras.layers.Layer):
         x = self.dropout(x, training=training)
 
         for i in range(self.num_layers):
-            x = self.enc_layers[i](x, training, mask)
+            x, attn = self.enc_layers[i](x, training, mask)
 
-        return x  # (batch_size, input_seq_len, d_model)
+        return x, attn  # (batch_size, input_seq_len, d_model)
 
 
 class Decoder(tf.keras.layers.Layer):
@@ -303,18 +303,16 @@ class Decoder(tf.keras.layers.Layer):
 
         if self.copynet:
             self.copy_network = tf.keras.Sequential([
-                tf.keras.layers.Dense(dff, activation='relu', input_shape=(None, d_model)),
+                tf.keras.layers.Dense(dff, activation='relu', input_shape=(None, d_model * 2)),
                 tf.keras.layers.Dense(1)])  # (batch_size, seq_len, d_model)
             self.gen_prob = tf.keras.layers.Dense(1, activation="sigmoid")
 
     def call(self, x, enc_output, training,
-             look_ahead_mask, padding_mask):
+             look_ahead_mask, padding_mask, encoder_attn, inp):
         seq_len = tf.shape(x)[1]
         attention_weights = {}
-        initial_input = x
 
         x = self.embedding(x)  # (batch_size, target_seq_len, d_model)
-        embedded = x
         x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         x += self.pos_encoding[:, :seq_len, :]
 
@@ -329,31 +327,34 @@ class Decoder(tf.keras.layers.Layer):
 
         if self.copynet:
             p_gen = self.gen_prob(x)
-            copy_distribution = self.copy_network(attn)
-            try:
-                copy_distribution = tf.squeeze(copy_distribution, axis=1)
-            except tf.errors.InvalidArgumentError:
-                copy_distribution = tf.squeeze(copy_distribution)
-            copy_probs = tf.nn.softmax(copy_distribution)
-            if copy_probs.shape.ndims == 1:
-                copy_probs = tf.expand_dims(copy_probs, axis=0)
-            i1, i2 = tf.meshgrid(tf.range(initial_input.shape[0]),
-                                 tf.range(initial_input.shape[1]), indexing="ij")
-            i1 = tf.tile(i1[:, :, tf.newaxis], [1, 1, 1])
-            i2 = tf.tile(i2[:, :, tf.newaxis], [1, 1, 1])
-            # Create final indices
-            idx = tf.stack([i1, i2, tf.expand_dims(initial_input, axis=2)], axis=-1)
-            # Output shape
-            to_shape = [initial_input.shape[0], initial_input.shape[1], self.target_vocab_size]
-            # Get scattered tensor
-            output = tf.scatter_nd(idx, tf.expand_dims(copy_probs, axis=2), to_shape)
-            copy_logits = tf.reduce_sum(output, axis=1)
+            copy_distributions = []
+            for dec_token in tf.unstack(x, axis=1):
+                to_concat = tf.tile(tf.expand_dims(dec_token, 1), [1,enc_output.shape[1], 1])
+                copynet_input = tf.concat([enc_output, to_concat], axis=-1)
+                copy_distribution = self.copy_network(copynet_input)
+                try:
+                    copy_distribution = tf.squeeze(copy_distribution, axis=1)
+                except tf.errors.InvalidArgumentError:
+                    copy_distribution = tf.squeeze(copy_distribution)
+                copy_probs = tf.nn.softmax(copy_distribution)
+                if copy_probs.shape.ndims == 1:
+                    copy_probs = tf.expand_dims(copy_probs, axis=0)
+                i1, i2 = tf.meshgrid(tf.range(inp.shape[0]),
+                                     tf.range(inp.shape[1]), indexing="ij")
+                i1 = tf.tile(i1[:, :, tf.newaxis], [1, 1, 1])
+                i2 = tf.tile(i2[:, :, tf.newaxis], [1, 1, 1])
+                # Create final indices
+                idx = tf.stack([i1, i2, tf.expand_dims(inp, axis=2)], axis=-1)
+                # Output shape
+                to_shape = [inp.shape[0], inp.shape[1], self.target_vocab_size]
+                # Get scattered tensor
+                output = tf.scatter_nd(idx, tf.expand_dims(copy_probs, axis=2), to_shape)
+                copy_logits = tf.reduce_sum(output, axis=1)
+                copy_distributions.append(copy_logits)
+            copy_distributions = tf.stack(copy_distributions, axis=1)
         else:
             p_gen = 0.
-            copy_logits = tf.zeros((initial_input.shape[0], self.target_vocab_size), dtype=x.dtype)
-        copy_logits = tf.tile(tf.expand_dims(copy_logits, axis=1), [1, x.shape[1], 1])
-        # x.shape == (batch_size, target_seq_len, d_model)
-        return x, attention_weights, p_gen, copy_logits
+        return x, attention_weights, p_gen, copy_distributions
 
 
 class Transformer(tf.keras.Model):
@@ -376,28 +377,28 @@ class Transformer(tf.keras.Model):
         self.bspan_final = tf.keras.layers.Dense(target_vocab_size)
 
     def bspan(self, inp, tar, training, enc_padding_mask, look_ahead_mask, dec_padding_mask):
-        enc_output = self.encoder(inp, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
+        enc_output, enc_attn = self.encoder(inp, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
 
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
-        dec_output, attention_weights, p_gen, copy_logits = self.bspan_decoder(
-            tar, enc_output, training, look_ahead_mask, dec_padding_mask)
+        dec_output, attention_weights, p_gen, copy_distributions = self.bspan_decoder(
+            tar, enc_output, training, look_ahead_mask, dec_padding_mask, enc_attn, inp)
 
         bspan_output = self.response_final(dec_output)  # (batch_size, tar_seq_len, target_vocab_size)
         if self.copynet:
-            bspan_output = p_gen * bspan_output + (1-p_gen) * copy_logits
+            bspan_output = p_gen * bspan_output + (1-p_gen) * copy_distributions
 
         return bspan_output, attention_weights
 
     def response(self, inp, tar, training, enc_padding_mask, look_ahead_mask, dec_padding_mask):
-        enc_output = self.encoder(inp, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
+        enc_output, enc_attn = self.encoder(inp, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
 
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
-        dec_output, attention_weights, p_gen, copy_logits = self.response_decoder(
-            tar, enc_output, training, look_ahead_mask, dec_padding_mask)
+        dec_output, attention_weights, p_gen, copy_distributions = self.response_decoder(
+            tar, enc_output, training, look_ahead_mask, dec_padding_mask, enc_attn, inp)
 
         response_output = self.response_final(dec_output)  # (batch_size, tar_seq_len, target_vocab_size)
         if self.copynet:
-            response_output = p_gen * response_output + (1-p_gen) * copy_logits
+            response_output = p_gen * response_output + (1-p_gen) * copy_distributions
 
         return response_output, attention_weights
 
@@ -506,7 +507,7 @@ class SeqModel:
         self.bspan_accuracy(tar_real, predictions)
 
     #@tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-    #    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
     def train_step_response(self, inp, tar):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
@@ -618,6 +619,8 @@ class SeqModel:
 
 
 if __name__ == "__main__":
+    # TODO copy distrib. for each dec inp tok
+
     # TODO make the embeddings optional and clean up the reader logic in the model creation
     # TODO model saving, with parameters processing in saving and loading
     # TODO try with different setups (number of heads, number of layers)
