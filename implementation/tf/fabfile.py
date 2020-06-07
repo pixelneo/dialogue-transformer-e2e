@@ -10,8 +10,9 @@ from runner import *
 password = os.environ['FAB_PWD']
 user = os.environ['FAB_USR']
 
-servers = ['u-pl{}.ms.mff.cuni.cz'.format(i) for i in range(1,21)]
+servers = ['u-pl{}.ms.mff.cuni.cz'.format(i) for i in range(1,19)]
 
+concurrent = 1
 
 _, parameters = load_params('params.yaml')
 # parameters = list(parameters)[:3]
@@ -28,8 +29,8 @@ def run(ctx):
         while counter > 0:
             try:
                 c = Connection(server, user=user, connect_kwargs={'password':password})
-                make_command = lambda x, lst: ' && '.join(['python run.py \'{}\' &> /dev/null'.format(str(p).replace('\'','"')) for p in lst[x::3]])
-                for z in range(3):
+                make_command = lambda x, lst: ' && '.join(['python run.py \'{}\' &> /dev/null'.format(str(p).replace('\'','"')) for p in lst[x::concurrent]])
+                for z in range(concurrent):
                     command = make_command(z, tasks)
                     c.run('. .bash_profile && cd tfdiag && {}'.format(command), disown=True)
                     print(command)

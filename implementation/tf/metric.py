@@ -18,6 +18,9 @@ order_to_number = {
     'six': 6, 'seven': 7, 'eight': 8, 'nin': 9, 'ten': 10, 'eleven': 11, 'twelve': 12
 }
 
+
+# initialize
+
 def similar(a,b):
     return a == b or a in b or b in a or a.split()[0] == b.split()[0] or a.split()[-1] == b.split()[-1]
     #return a == b or b.endswith(a) or a.endswith(b)    
@@ -74,6 +77,78 @@ def success_f1_metric(real, generated, sub='successf1'):
     precision, recall = tp / (tp + fp + 1e-8), tp / (tp + fn + 1e-8)
     f1 = 2 * precision * recall / (precision + recall + 1e-8)
     return f1
+
+class SimpleEvaluator:
+    def match_metric(self, real, generated, real_bspans, generated_bspans, sub='match',raw_data=None):
+        raise NotImplementedError()
+
+class SimpleCamRestEvaluator(SimpleEvaluator):
+    def __init__(self):
+        self.entities = []
+
+    def _init_data(self):
+        raw_json = open('./data/CamRest676/CamRest676.json')
+        raw_entities = open('./data/CamRest676/CamRestOTGY.json')
+        raw_entities = json.loads(raw_entities.read().lower())
+        self.get_entities(raw_entities)
+
+    def _extract_constraint(self, z):
+        z = z.split()
+        if 'EOS_Z1' not in z:
+            s = set(z)
+        else:
+            idx = z.index('EOS_Z1')
+            s = set(z[:idx])
+        if 'moderately' in s:
+            s.discard('moderately')
+            s.add('moderate')
+        #print(self.entities) 
+        #return s
+        return s.intersection(self.entities)  # TODO handle self.entities
+        #return set(z).difference(['name', 'address', 'postcode', 'phone', 'area', 'pricerange'])
+
+    def match_metric(self, real, generated, real_bspans, generated_bspans, sub='match',raw_data=None):
+        match,total = 0,1e-8
+        success = 0
+        # find out the last placeholder and see whether that is correct
+        # if no such placeholder, see the final turn, because it can be a yes/no question or scheduling dialogue
+        for hyps, refs, gen_dial_bspans, dial_bspan in zip(generated, real, generated_bspans, real_bspans):
+            truth_req, gen_req = [], []
+            gen_bspan, truth_cons, gen_cons = None, None, set()
+            truth_turn_num = -1
+            truth_response_req = []
+            # for turn_num,turn in enumerate(dial):
+            for turn_hyp, turn_ref, gen_turn_bspan, turn_bspan in zip(hyps, refs, gen_dial_bspans):
+                if 'SLOT' in turn_hyp:
+                    gen_bspan = gen_turn_bspan
+                    gen_cons = _extract_constraint(gen_bspan)
+                if 'SLOT' in turn_ref:
+                    truth_cons = _extract_constraint(turn_bspan)
+                gen_response_token = turn_hyp.split()
+                response_token = turn_ref.split()
+                for idx, w in enumerate(gen_response_token):
+                    if w.endswith('SLOT') and w != 'SLOT':
+                        gen_req.append(w.split('_')[0])
+                    if w == 'SLOT' and idx != 0:
+                        gen_req.append(gen_response_token[idx - 1])
+                for idx, w in enumerate(response_token):
+                    if w.endswith('SLOT') and w != 'SLOT':
+                        truth_response_req.append(w.split('_')[0])
+            if not gen_cons:
+                gen_bspan = gen_dial_bspans[-1]  #dial[-1]['generated_bspan']
+                gen_cons = _extract_constraint(gen_bspan)
+            if truth_cons:
+                if gen_cons == truth_cons:
+                    match += 1
+              
+                total += 1
+
+        return match / total, success / total
+
+
+
+
+
 
 class BLEUScorer(object):
     ## BLEU score calculator via GentScorer interface
@@ -133,6 +208,7 @@ class BLEUScorer(object):
                       for w, p_n in zip(weights, p_ns) if p_n)
         bleu = bp * math.exp(s)
         return bleu
+
 
 
 def report(func):
@@ -255,9 +331,9 @@ class CamRestEvaluator(GenericEvaluator):
 
     def _extract_constraint(self, z):
         z = z.split()
-        if 'EOS_Z1' not in z:
+        if 'EOS_Z1' not in z:  # all words (this applies to response??)
             s = set(z)
-        else:
+        else:  # only BSPAN, actually only the first part of it (in case there is also EOS_Z2)
             idx = z.index('EOS_Z1')
             s = set(z[:idx])
         if 'moderately' in s:
@@ -293,7 +369,7 @@ class CamRestEvaluator(GenericEvaluator):
                     truth_cons = self._extract_constraint(turn['bspan'])
                 gen_response_token = turn['generated_response'].split()
                 response_token = turn['response'].split()
-                for idx, w in enumerate(gen_response_token):
+                for idx, w in enumerate(gen_response_token):   # this extracts the 'name|adress|food' part from {}_SLOT
                     if w.endswith('SLOT') and w != 'SLOT':
                         gen_req.append(w.split('_')[0])
                     if w == 'SLOT' and idx != 0:
