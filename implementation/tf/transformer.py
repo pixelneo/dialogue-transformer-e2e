@@ -559,7 +559,7 @@ class SeqModel:
             if epoch >= 50 and (epoch % 30) == 0:
                 self.evaluation(verbose=True, log=log, max_sent=max_sent, max_turns=max_turns, use_metric=True)
 
-    def auto_regress(self, input_sequence, decoder, MAX_LENGTH=256):
+    def auto_regress(self, input_sequence, decoder, MAX_LENGTH=128):
         assert decoder in ["bspan", "response"]
         decoder_input = [cfg.vocab_size]
         output = tf.expand_dims(decoder_input, 0)
@@ -581,10 +581,10 @@ class SeqModel:
             predictions = predictions[:, -1:, :]  # (batch_size, 1, vocab_size)
             predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
 
+            output = tf.concat([output, predicted_id], axis=-1)
+
             if predicted_id == end_token_id:
                 return tf.squeeze(output, axis=0), attention_weights
-
-            output = tf.concat([output, predicted_id], axis=-1)
 
         return tf.squeeze(output, axis=0), attention_weights
 
