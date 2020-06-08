@@ -405,7 +405,7 @@ class Transformer(tf.keras.Model):
 
 
 class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
-    def __init__(self, d_model, warmup_steps=4000):   # TODO question: why 4000?, can it change?
+    def __init__(self, d_model, warmup_steps=4000):
         super(CustomSchedule, self).__init__()
 
         self.d_model = d_model
@@ -556,7 +556,7 @@ class SeqModel:
                     previous_bspan = bspan_received
                     previous_response = response
             print("Completed epoch #{} of {}".format(epoch + 1, epochs))
-            if epoch > 15 and epoch % 10 == 0:
+            if epoch >= 50 and (epoch % 30) == 0:
                 self.evaluation(verbose=True, log=log, max_sent=max_sent, max_turns=max_turns, use_metric=True)
 
     def auto_regress(self, input_sequence, decoder, MAX_LENGTH=256):
@@ -651,5 +651,5 @@ if __name__ == "__main__":
     cfg.init_handler(ds)
     cfg.dataset = ds.split('-')[-1]
     reader = CamRest676Reader()
-    model = SeqModel(vocab_size=cfg.vocab_size, copynet=True, reader=reader)
+    model = SeqModel(d_model=100, vocab_size=cfg.vocab_size, copynet=True, reader=reader)
     model.train_model(log=False)

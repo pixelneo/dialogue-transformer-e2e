@@ -10,7 +10,7 @@ from runner import *
 password = os.environ['FAB_PWD']
 user = os.environ['FAB_USR']
 
-servers = ['u-pl{}.ms.mff.cuni.cz'.format(i) for i in range(1,19)]
+servers = ['u-pl{}.ms.mff.cuni.cz'.format(i) for i in range(1,21)]
 
 concurrent = 1
 
