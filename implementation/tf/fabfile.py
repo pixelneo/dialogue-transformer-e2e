@@ -10,20 +10,15 @@ from runner import *
 password = os.environ['FAB_PWD']
 user = os.environ['FAB_USR']
 
-servers = ['u-pl{}.ms.mff.cuni.cz'.format(i) for i in range(1,21)]
+servers = ['u-pl{}.ms.mff.cuni.cz'.format(i) for i in range(13, 21)]
 
 concurrent = 1
 
-_, parameters = load_params('params.yaml')
-# parameters = list(parameters)[:3]
+def _run(parameters):
+    server2task = dict(((s, []) for s in servers))
+    for i, params in enumerate(parameters):
+        server2task[servers[i%len(servers)]].append(params)
 
-server2task = dict(((s, []) for s in servers))
-for i, params in enumerate(parameters):
-    server2task[servers[i%len(servers)]].append(params)
-
-
-@task
-def run(ctx):
     for server, tasks in server2task.items():
         counter = 5
         while counter > 0:
@@ -45,4 +40,19 @@ def run(ctx):
                 time.sleep(2)
     print('DONE')
 
+
+@task
+def run(ctx):
+    _, parameters = load_params('params.yaml')
+    # parameters = list(parameters)[:3]
+
+    _run(parameters)
+
+
+@task
+def runl(ctx):
+    _, parameters = load_list_of_params('params_list.json')
+    concurrent = 1
+
+    _run(parameters)
 

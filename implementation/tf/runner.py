@@ -1,11 +1,21 @@
 #!/usr/bin/env python3 
 import itertools
+import json
 
 import neptune
 import yaml
 
 from transformer import *
 from reader import *
+
+
+
+def load_list_of_params(path):
+    with open(path, 'r') as f:
+        obj = json.load(f)
+
+    return obj['parameters'], obj['items']
+
 
 def load_params(path):
     """ Get input for parameter search and return grid-search inputs
@@ -14,6 +24,7 @@ def load_params(path):
         List with parameter names and iterator over all combinations of parameters.
 
     """
+
     def _params(p_names, it):
         for p_set in it:
              yield dict(zip(p_names, p_set))

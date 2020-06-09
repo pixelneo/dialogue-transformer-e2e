@@ -6,6 +6,8 @@ import os
 import warnings
 import metric
 
+tf.random.set_seed(42)
+
 try:
     import neptune
 except ImportError:
@@ -556,7 +558,7 @@ class SeqModel:
                     previous_bspan = bspan_received
                     previous_response = response
             print("Completed epoch #{} of {}".format(epoch + 1, epochs))
-            if epoch >= 50 and (epoch % 30) == 0:
+            if epoch >= 46 and epoch % 2 == 0:
                 self.evaluation(verbose=True, log=log, max_sent=max_sent, max_turns=max_turns, use_metric=True)
 
     def auto_regress(self, input_sequence, decoder, MAX_LENGTH=128):
