@@ -26,7 +26,7 @@ class _Config:
     def _camrest_tsdf_init(self):
         self.beam_len_bonus = 0.5
         self.prev_z_method = 'separate'
-        self.vocab_size = 800
+        self.vocab_size = 800 
         self.embedding_size = 50
         self.hidden_size = 50
         self.split = (3, 1, 1)

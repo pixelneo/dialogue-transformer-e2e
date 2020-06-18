@@ -6,7 +6,6 @@ import os
 import warnings
 import metric
 
-tf.random.set_seed(42)
 
 try:
     import neptune
@@ -355,9 +354,11 @@ class Decoder(tf.keras.layers.Layer):
                 copy_logits = tf.reduce_sum(output, axis=1)
                 copy_distributions.append(copy_logits)
             copy_distributions = tf.stack(copy_distributions, axis=1)
+
+            return x, attention_weights, p_gen, copy_distributions
         else:
             p_gen = 0.
-        return x, attention_weights, p_gen, copy_distributions
+            return x, attention_weights, p_gen, 0.
 
 
 class Transformer(tf.keras.Model):
@@ -473,6 +474,7 @@ class SeqModel:
         self.bspan_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
         self.response_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
         self.reader = reader
+        self.f1s = []
 
         if reader:
             print("Reading pre-trained word embeddings with {} dimensions".format(d_model))
@@ -558,8 +560,8 @@ class SeqModel:
                     previous_bspan = bspan_received
                     previous_response = response
             print("Completed epoch #{} of {}".format(epoch + 1, epochs))
-            if epoch >= 46 and epoch % 2 == 0:
-                self.evaluation(verbose=True, log=log, max_sent=max_sent, max_turns=max_turns, use_metric=True)
+            # if epoch >= 50 and epoch % 1 == 0:
+                # self.evaluation(verbose=True, log=log, max_sent=max_sent, max_turns=max_turns, use_metric=True, epoch=epoch)
 
     def auto_regress(self, input_sequence, decoder, MAX_LENGTH=128):
         assert decoder in ["bspan", "response"]
@@ -599,7 +601,7 @@ class SeqModel:
         predicted_response, _ = self.auto_regress(response_decoder_input, "response")
         return predicted_response
 
-    def evaluation(self, mode="dev", verbose=False, log=False, max_sent=1, max_turns=1, use_metric=False):
+    def evaluation(self, mode="dev", verbose=False, log=False, max_sent=1, max_turns=1, use_metric=False, epoch=999):
         dialogue_set = self.reader.dev if mode == "dev" else self.reader.test
         predictions, targets = list(), list()
         constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
@@ -636,16 +638,18 @@ class SeqModel:
 
             # Sucess F1
             f1 = metric.success_f1_metric(targets, predictions)
+            self.f1s.append(f1)
 
             if verbose:
                 print("Bleu: {:.4f}%".format(bleu*100))
                 print("F1: {:.4f}%".format(f1*100))
             if log:
-                neptune.log_metric('bleu', bleu)
-                neptune.log_metric('f1', f1)
-                if max_sent >= 150:
-                    neptune.log_metric('bleu_final', bleu)
-                    neptune.log_metric('f1_final', f1)
+                neptune.log_metric('bleu', epoch, bleu)
+                neptune.log_metric('f1', epoch, f1)
+                neptune.log_metric('f1_max', max(self.f1s))
+                if mode=='test':
+                    neptune.log_metric('f1_test', epoch, f1)
+                    neptune.log_metric('bleu_test', epoch, bleu)
 
 
 if __name__ == "__main__":
@@ -653,5 +657,8 @@ if __name__ == "__main__":
     cfg.init_handler(ds)
     cfg.dataset = ds.split('-')[-1]
     reader = CamRest676Reader()
-    model = SeqModel(d_model=100, vocab_size=cfg.vocab_size, copynet=True, reader=reader)
-    model.train_model(log=False)
+    model = SeqModel(d_model=50, vocab_size=cfg.vocab_size, copynet=True, reader=reader)
+    model.train_model(epochs=1, log=False)
+    model.transformer.save('model')
+
+

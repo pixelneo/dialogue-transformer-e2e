@@ -9,8 +9,9 @@ from runner import *
 
 password = os.environ['FAB_PWD']
 user = os.environ['FAB_USR']
-
-servers = ['u-pl{}.ms.mff.cuni.cz'.format(i) for i in range(13, 21)]
+s = list(range(5,21))
+s.pop(3)
+servers = ['u-pl{}.ms.mff.cuni.cz'.format(i) for i in s]
 
 concurrent = 1
 
@@ -18,9 +19,9 @@ def _run(parameters):
     server2task = dict(((s, []) for s in servers))
     for i, params in enumerate(parameters):
         server2task[servers[i%len(servers)]].append(params)
-
+    s = 0
     for server, tasks in server2task.items():
-        counter = 5
+        counter = 3
         while counter > 0:
             try:
                 c = Connection(server, user=user, connect_kwargs={'password':password})
@@ -36,8 +37,9 @@ def _run(parameters):
                 print(e)
                 counter = counter - 1
                 if counter == 0:
+                    s += 1
                     raise TimeoutError('ERROR: cannot connect to server {}'.format(server))
-                time.sleep(2)
+                time.sleep(1)
     print('DONE')
 
 

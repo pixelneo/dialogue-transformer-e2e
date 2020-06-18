@@ -11,7 +11,6 @@ import re
 import csv
 import time, datetime
 
-random.seed(42)
 
 def clean_replace(s, r, t, forward=True, backward=False):
     def clean_replace_single(s, r, t, forward, backward, sidx=0):
