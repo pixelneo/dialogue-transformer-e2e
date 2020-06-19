@@ -12,6 +12,7 @@ This is a repository for End-to-end Dialogue Transformer project for [Statistica
 - [x] Implement it in tensorflow
 
 ## Results
+We evaluated out system on the [CamRest676 dataset](https://github.com/WING-NUS/sequicity/tree/master/data/CamRest676).
 
 | System                | F1 success | BLEU      |
 |-----------------------|------------|-----------|
