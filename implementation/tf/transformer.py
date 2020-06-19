@@ -659,6 +659,5 @@ if __name__ == "__main__":
     reader = CamRest676Reader()
     model = SeqModel(d_model=50, vocab_size=cfg.vocab_size, copynet=True, reader=reader)
     model.train_model(epochs=1, log=False)
-    model.transformer.save('model')
 
 
