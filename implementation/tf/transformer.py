@@ -1,9 +1,16 @@
 import tensorflow as tf
-import tensorflow_hub as hub
 import time
 import numpy as np
 from reader import *
 import os
+import warnings
+import metric
+
+
+try:
+    import neptune
+except ImportError:
+    warnings.warn('neptune module is not installed (used for logging)', ImportWarning)
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
@@ -146,7 +153,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
 
         output = self.dense(concat_attention)  # (batch_size, seq_len_q, d_model)
 
-        return output, attention_weights
+        return output, attention_weights, scaled_attention
 
 
 def point_wise_feed_forward_network(d_model, dff):
@@ -154,6 +161,25 @@ def point_wise_feed_forward_network(d_model, dff):
       tf.keras.layers.Dense(dff, activation='relu', input_shape=(None, d_model)),  # (batch_size, seq_len, dff)
       tf.keras.layers.Dense(d_model)  # (batch_size, seq_len, d_model)
   ])
+
+
+def read_embeddings(reader, embeddings_file="data/glove.6B.{}d.txt", embedding_size=50):
+    """
+    :param reader: a dialogue dataset reader, where we will get words mapped to indices
+    :param embeddings_file: file path for glove embeddings
+    :return: dictionary of indices mapped to their glove embeddings
+    """
+    vocab_to_index = {reader.vocab.decode(id): id for id in range(cfg.vocab_size)}
+    embedding_matrix = np.zeros((cfg.vocab_size + 1, embedding_size))
+    embeddings_file = embeddings_file.format(embedding_size)
+    with open(embeddings_file) as infile:
+        for line in infile:
+            word, coeffs = line.split(maxsplit=1)
+            if word in vocab_to_index:
+                word_index = vocab_to_index[word]
+                embedding_matrix[word_index] = np.fromstring(coeffs, 'f', sep=' ')
+
+    return embedding_matrix
 
 
 class EncoderLayer(tf.keras.layers.Layer):
@@ -170,7 +196,7 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.dropout2 = tf.keras.layers.Dropout(rate)
 
     def call(self, x, training, mask):
-        attn_output, _ = self.mha(x, x, x, mask)  # (batch_size, input_seq_len, d_model)
+        attn_output, _, _ = self.mha(x, x, x, mask)  # (batch_size, input_seq_len, d_model)
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(x + attn_output)  # (batch_size, input_seq_len, d_model)
 
@@ -178,7 +204,7 @@ class EncoderLayer(tf.keras.layers.Layer):
         ffn_output = self.dropout2(ffn_output, training=training)
         out2 = self.layernorm2(out1 + ffn_output)  # (batch_size, input_seq_len, d_model)
 
-        return out2
+        return out2, attn_output
 
 
 class DecoderLayer(tf.keras.layers.Layer):
@@ -202,11 +228,11 @@ class DecoderLayer(tf.keras.layers.Layer):
              look_ahead_mask, padding_mask):
         # enc_output.shape == (batch_size, input_seq_len, d_model)
 
-        attn1, attn_weights_block1 = self.mha1(x, x, x, look_ahead_mask)  # (batch_size, target_seq_len, d_model)
+        attn1, attn_weights_block1, _ = self.mha1(x, x, x, look_ahead_mask)  # (batch_size, target_seq_len, d_model)
         attn1 = self.dropout1(attn1, training=training)
         out1 = self.layernorm1(attn1 + x)
 
-        attn2, attn_weights_block2 = self.mha2(
+        attn2, attn_weights_block2, scaled_attention = self.mha2(
             enc_output, enc_output, out1, padding_mask)  # (batch_size, target_seq_len, d_model)
         attn2 = self.dropout2(attn2, training=training)
         out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
@@ -215,19 +241,22 @@ class DecoderLayer(tf.keras.layers.Layer):
         ffn_output = self.dropout3(ffn_output, training=training)
         out3 = self.layernorm3(ffn_output + out2)  # (batch_size, target_seq_len, d_model)
 
-        return out3, attn_weights_block1, attn_weights_block2
+        return out3, attn_weights_block1, attn_weights_block2, attn2
 
 
 class Encoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size,
-                 maximum_position_encoding, rate=0.1):
+                 maximum_position_encoding, rate=0.1, embeddings_matrix=None):
         super(Encoder, self).__init__()
 
         self.d_model = d_model
         self.num_layers = num_layers
 
-        # use 50 dim embedding from tfhub
-        self.embedding = hub_layer = hub.KerasLayer("https://tfhub.dev/google/nnlm-en-dim50-with-normalization/2")
+        if embeddings_matrix is not None:
+            self.embedding = tf.keras.layers.Embedding(input_vocab_size, d_model,
+                                                       embeddings_initializer=tf.keras.initializers.Constant(embeddings_matrix))
+        else:
+            self.embedding = tf.keras.layers.Embedding(input_vocab_size, d_model)
 
         self.pos_encoding = positional_encoding(maximum_position_encoding,
                                                 self.d_model)
@@ -248,28 +277,40 @@ class Encoder(tf.keras.layers.Layer):
         x = self.dropout(x, training=training)
 
         for i in range(self.num_layers):
-            x = self.enc_layers[i](x, training, mask)
+            x, attn = self.enc_layers[i](x, training, mask)
 
-        return x  # (batch_size, input_seq_len, d_model)
+        return x, attn  # (batch_size, input_seq_len, d_model)
 
 
 class Decoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, d_model, num_heads, dff, target_vocab_size,
-                 maximum_position_encoding, rate=0.1):
+                 maximum_position_encoding, rate=0.1, copynet=False, embeddings_matrix=None):
         super(Decoder, self).__init__()
-
+        self.target_vocab_size = target_vocab_size
+        self.copynet = copynet
         self.d_model = d_model
         self.num_layers = num_layers
 
-        self.embedding = tf.keras.layers.Embedding(target_vocab_size, d_model)
+        if embeddings_matrix is not None:
+            self.embedding = tf.keras.layers.Embedding(target_vocab_size, d_model,
+                                                       embeddings_initializer=tf.keras.initializers.Constant(embeddings_matrix))
+        else:
+            self.embedding = tf.keras.layers.Embedding(target_vocab_size, d_model)
+
         self.pos_encoding = positional_encoding(maximum_position_encoding, d_model)
 
         self.dec_layers = [DecoderLayer(d_model, num_heads, dff, rate)
                            for _ in range(num_layers)]
         self.dropout = tf.keras.layers.Dropout(rate)
 
+        if self.copynet:
+            self.copy_network = tf.keras.Sequential([
+                tf.keras.layers.Dense(dff, activation='relu', input_shape=(None, d_model * 2)),
+                tf.keras.layers.Dense(1)])  # (batch_size, seq_len, d_model)
+            self.gen_prob = tf.keras.layers.Dense(1, activation="sigmoid")
+
     def call(self, x, enc_output, training,
-             look_ahead_mask, padding_mask):
+             look_ahead_mask, padding_mask, encoder_attn, inp):
         seq_len = tf.shape(x)[1]
         attention_weights = {}
 
@@ -280,52 +321,88 @@ class Decoder(tf.keras.layers.Layer):
         x = self.dropout(x, training=training)
 
         for i in range(self.num_layers):
-            x, block1, block2 = self.dec_layers[i](x, enc_output, training,
+            x, block1, block2, attn = self.dec_layers[i](x, enc_output, training,
                                                    look_ahead_mask, padding_mask)
 
             attention_weights['decoder_layer{}_block1'.format(i + 1)] = block1
             attention_weights['decoder_layer{}_block2'.format(i + 1)] = block2
 
-        # x.shape == (batch_size, target_seq_len, d_model)
-        return x, attention_weights
+        if self.copynet:
+            p_gen = self.gen_prob(x)
+            copy_distributions = []
+            for dec_token in tf.unstack(x, axis=1):
+                to_concat = tf.tile(tf.expand_dims(dec_token, 1), [1,enc_output.shape[1], 1])
+                copynet_input = tf.concat([enc_output, to_concat], axis=-1)
+                copy_distribution = self.copy_network(copynet_input)
+                try:
+                    copy_distribution = tf.squeeze(copy_distribution, axis=1)
+                except tf.errors.InvalidArgumentError:
+                    copy_distribution = tf.squeeze(copy_distribution)
+                copy_probs = tf.nn.softmax(copy_distribution)
+                if copy_probs.shape.ndims == 1:
+                    copy_probs = tf.expand_dims(copy_probs, axis=0)
+                i1, i2 = tf.meshgrid(tf.range(inp.shape[0]),
+                                     tf.range(inp.shape[1]), indexing="ij")
+                i1 = tf.tile(i1[:, :, tf.newaxis], [1, 1, 1])
+                i2 = tf.tile(i2[:, :, tf.newaxis], [1, 1, 1])
+                # Create final indices
+                idx = tf.stack([i1, i2, tf.expand_dims(inp, axis=2)], axis=-1)
+                # Output shape
+                to_shape = [inp.shape[0], inp.shape[1], self.target_vocab_size]
+                # Get scattered tensor
+                output = tf.scatter_nd(idx, tf.expand_dims(copy_probs, axis=2), to_shape)
+                copy_logits = tf.reduce_sum(output, axis=1)
+                copy_distributions.append(copy_logits)
+            copy_distributions = tf.stack(copy_distributions, axis=1)
+
+            return x, attention_weights, p_gen, copy_distributions
+        else:
+            p_gen = 0.
+            return x, attention_weights, p_gen, 0.
 
 
 class Transformer(tf.keras.Model):
     def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size,
-                 target_vocab_size, pe_input, pe_target, rate=0.1):
+                 target_vocab_size, pe_input, pe_target, rate=0.1, copynet=False, embeddings_matrix=None):
         super(Transformer, self).__init__()
 
+        self.copynet = copynet
+
         self.encoder = Encoder(num_layers, d_model, num_heads, dff,
-                               input_vocab_size, pe_input, rate)
+                               input_vocab_size, pe_input, rate, )
 
         self.response_decoder = Decoder(num_layers, d_model, num_heads, dff,
-                               target_vocab_size, pe_target, rate)
+                               target_vocab_size, pe_target, rate, copynet, embeddings_matrix)
 
         self.bspan_decoder = Decoder(num_layers, d_model, num_heads, dff,
-                               target_vocab_size, pe_target, rate)
+                               target_vocab_size, pe_target, rate, copynet, embeddings_matrix)
 
         self.response_final = tf.keras.layers.Dense(target_vocab_size)
         self.bspan_final = tf.keras.layers.Dense(target_vocab_size)
 
     def bspan(self, inp, tar, training, enc_padding_mask, look_ahead_mask, dec_padding_mask):
-        enc_output = self.encoder(inp, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
+        enc_output, enc_attn = self.encoder(inp, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
 
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
-        dec_output, attention_weights = self.bspan_decoder(
-            tar, enc_output, training, look_ahead_mask, dec_padding_mask)
+        dec_output, attention_weights, p_gen, copy_distributions = self.bspan_decoder(
+            tar, enc_output, training, look_ahead_mask, dec_padding_mask, enc_attn, inp)
 
         bspan_output = self.response_final(dec_output)  # (batch_size, tar_seq_len, target_vocab_size)
+        if self.copynet:
+            bspan_output = p_gen * bspan_output + (1-p_gen) * copy_distributions
 
         return bspan_output, attention_weights
 
     def response(self, inp, tar, training, enc_padding_mask, look_ahead_mask, dec_padding_mask):
-        enc_output = self.encoder(inp, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
+        enc_output, enc_attn = self.encoder(inp, training, enc_padding_mask)  # (batch_size, inp_seq_len, d_model)
 
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
-        dec_output, attention_weights = self.response_decoder(
-            tar, enc_output, training, look_ahead_mask, dec_padding_mask)
+        dec_output, attention_weights, p_gen, copy_distributions = self.response_decoder(
+            tar, enc_output, training, look_ahead_mask, dec_padding_mask, enc_attn, inp)
 
         response_output = self.response_final(dec_output)  # (batch_size, tar_seq_len, target_vocab_size)
+        if self.copynet:
+            response_output = p_gen * response_output + (1-p_gen) * copy_distributions
 
         return response_output, attention_weights
 
@@ -360,27 +437,60 @@ def loss_function(real, pred):
     return tf.reduce_sum(loss_) / tf.reduce_sum(mask)
 
 
-class SeqModel:
-    def __init__(self, vocab_size, num_layers=4, d_model=50, dff=512, num_heads=5, dropout_rate=0.1):
-        self.vocab_size = vocab_size
-        input_vocab_size = vocab_size
-        target_vocab_size = vocab_size
+def tensorize(id_lists):
+    tensorized = tf.ragged.constant([x for x in id_lists]).to_tensor()
+    return tf.cast(tensorized, dtype=tf.int32)
 
-        self.learning_rate = CustomSchedule(d_model)
+
+# TODO change these functions so that they can take tensor input and not just list
+def produce_bspan_decoder_input(previous_bspan, previous_response, user_input):
+    inputs =[]
+    start_symbol = [cfg.vocab_size]
+    for counter, (x, y, z) in enumerate(zip(previous_bspan, previous_response, user_input)):
+        new_sample = start_symbol + x + y + z  # TODO concatenation should be more readable than this
+        inputs.append(new_sample)
+    return tensorize(inputs)
+
+
+def produce_response_decoder_input(previous_bspan, previous_response, user_input, bspan, kb):
+    start_symbol = [cfg.vocab_size]
+    inputs = []
+    for a, b, c, d, e in zip(previous_bspan, previous_response, user_input, bspan, kb):
+        inputs.append(start_symbol + a + b + c + d + e)
+    return tensorize(inputs)
+
+
+class SeqModel:
+    def __init__(self, vocab_size, num_layers=3, d_model=50, dff=512, num_heads=5, dropout_rate=0.1, copynet=False,
+                 reader=None, warmup_steps=4000):
+        self.vocab_size = vocab_size + 1
+        input_vocab_size = vocab_size + 1
+        target_vocab_size = vocab_size + 1
+
+        self.learning_rate = CustomSchedule(d_model, warmup_steps)
         self.optimizer = tf.keras.optimizers.Adam(self.learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
         self.bspan_loss = tf.keras.metrics.Mean(name='train_loss')
         self.response_loss = tf.keras.metrics.Mean(name='train_loss')
         self.bspan_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
         self.response_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
+        self.reader = reader
+        self.f1s = []
+
+        if reader:
+            print("Reading pre-trained word embeddings with {} dimensions".format(d_model))
+            embeddings_matrix = read_embeddings(reader, embedding_size=d_model)
+        else:
+            print("Initializing without pre-trained embeddings.")
+            embeddings_matrix=None
 
         self.transformer = Transformer(num_layers, d_model, num_heads, dff,
                                   input_vocab_size, target_vocab_size,
                                   pe_input=input_vocab_size,
                                   pe_target=target_vocab_size,
-                                  rate=dropout_rate)
+                                  rate=dropout_rate, copynet=copynet, embeddings_matrix=embeddings_matrix)
 
-    @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+    #@tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    #    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
     def train_step_bspan(self, inp, tar):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
@@ -399,11 +509,10 @@ class SeqModel:
                     for grad, var in zip(gradients, self.transformer.trainable_variables)]
         self.optimizer.apply_gradients(zip(gradients, self.transformer.trainable_variables))
 
-        self.bspan_loss(loss)
         self.bspan_accuracy(tar_real, predictions)
 
-    @tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+    #@tf.function(input_signature=[tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    #     tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
     def train_step_response(self, inp, tar):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
@@ -421,76 +530,126 @@ class SeqModel:
                     for grad, var in zip(gradients, self.transformer.trainable_variables)]
         self.optimizer.apply_gradients(zip(gradients, self.transformer.trainable_variables))
 
-        self.response_loss(loss)
         self.response_accuracy(tar_real, predictions)
 
-    def evaluate(self, inp_sentence, MAX_LENGTH=40):
-        start_token = [self.vocab_size]
-        end_token = [self.vocab_size + 1]
+    def train_model(self, epochs=20, log=False, max_sent=1, max_turns=1):
+        constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
+        for epoch in range(epochs):
+            data_iterator = self.reader.mini_batch_iterator('train')
+            for iter_num, dial_batch in enumerate(data_iterator):
+                previous_bspan, previous_response = None, None
+                for turn_num, turn_batch in enumerate(dial_batch):
+                    _, _, user, response, bspan_received, u_len, m_len, degree, _ = turn_batch.values()
+                    batch_size = len(user)
+                    if previous_bspan is None:
+                        previous_bspan = [[self.reader.vocab.encode(constraint_eos),
+                                           self.reader.vocab.encode(request_eos)] for i in range(batch_size)]
+                        previous_response = [[self.reader.vocab.encode(response_eos)] for i in range(batch_size)]
+                    target_bspan = tensorize([[cfg.vocab_size] + x for x in bspan_received])
+                    target_response = tensorize([[cfg.vocab_size] + x for x in response])
 
-        # inp sentence is portuguese, hence adding the start and end token
-        inp_sentence = start_token + self.tokenizer.encode_as_ids(inp_sentence) + end_token
-        encoder_input = tf.expand_dims(inp_sentence, 0)
+                    bspan_decoder_input = produce_bspan_decoder_input(previous_bspan, previous_response, user)
+                    response_decoder_input = produce_response_decoder_input(previous_bspan, previous_response,
+                                                                            user, bspan_received, degree)
+                    # TODO actually save the models, keeping track of the best one
 
-        # as the target is english, the first word to the transformer should be the
-        # english start token.
-        decoder_input = [self.vocab_size]
+                    # training the model
+                    self.train_step_bspan(bspan_decoder_input, target_bspan)
+                    self.train_step_response(response_decoder_input, target_response)
+
+                    previous_bspan = bspan_received
+                    previous_response = response
+            print("Completed epoch #{} of {}".format(epoch + 1, epochs))
+            # if epoch >= 50 and epoch % 1 == 0:
+                # self.evaluation(verbose=True, log=log, max_sent=max_sent, max_turns=max_turns, use_metric=True, epoch=epoch)
+
+    def auto_regress(self, input_sequence, decoder, MAX_LENGTH=128):
+        assert decoder in ["bspan", "response"]
+        decoder_input = [cfg.vocab_size]
         output = tf.expand_dims(decoder_input, 0)
 
+        end_token_id = self.reader.vocab.encode("EOS_Z2") if decoder == "bspan" else self.reader.vocab.encode("EOS_M")
+
         for i in range(MAX_LENGTH):
-            enc_padding_mask, combined_mask, dec_padding_mask = create_masks(
-                encoder_input, output)
+            enc_padding_mask, combined_mask, dec_padding_mask = create_masks(input_sequence, output)
 
-            # predictions.shape == (batch_size, seq_len, vocab_size)
-            predictions, attention_weights = self.transformer(encoder_input,
-                                                         output,
-                                                         False,
-                                                         enc_padding_mask,
-                                                         combined_mask,
-                                                         dec_padding_mask)
+            if decoder == "bspan":
+                predictions, attention_weights = self.transformer.bspan(input_sequence, output, False,
+                                                                        enc_padding_mask, combined_mask,
+                                                                        dec_padding_mask)
+            else:
+                predictions, attention_weights = self.transformer.response(input_sequence, output, False,
+                                                                           enc_padding_mask, combined_mask,
+                                                                           dec_padding_mask)
 
-            # select the last word from the seq_len dimension
             predictions = predictions[:, -1:, :]  # (batch_size, 1, vocab_size)
-
             predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
 
-            # return the result if the predicted_id is equal to the end token
-            if predicted_id == self.tokenizer.GetPieceSize() + 1:
-                return tf.squeeze(output, axis=0), attention_weights
-
-            # concatentate the predicted_id to the output which is given to the decoder
-            # as its input.
             output = tf.concat([output, predicted_id], axis=-1)
+
+            if predicted_id == end_token_id:
+                return tf.squeeze(output, axis=0), attention_weights
 
         return tf.squeeze(output, axis=0), attention_weights
 
-    def restore_latest(self, checkpoint_path="./checkpoints/train"):
-        ckpt = tf.train.Checkpoint(transformer=self.transformer, optimizer=self.optimizer)
+    def evaluate(self, previous_bspan, previous_response, user, degree):
+        bspan_decoder_input = produce_bspan_decoder_input([previous_bspan], [previous_response], [user])
+        predicted_bspan, _ = self.auto_regress(bspan_decoder_input, "bspan")
 
-        ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=50)
+        response_decoder_input = produce_response_decoder_input([previous_bspan], [previous_response],
+                                                                [user], [list(predicted_bspan.numpy())], [degree])
+        predicted_response, _ = self.auto_regress(response_decoder_input, "response")
+        return predicted_response
 
-        # if a checkpoint exists, restore the latest checkpoint.
-        if ckpt_manager.latest_checkpoint:
-            ckpt.restore(ckpt_manager.latest_checkpoint)
-            print('Latest checkpoint restored!!')
+    def evaluation(self, mode="dev", verbose=False, log=False, max_sent=1, max_turns=1, use_metric=False, epoch=999):
+        dialogue_set = self.reader.dev if mode == "dev" else self.reader.test
+        predictions, targets = list(), list()
+        constraint_eos, request_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
+        for dialogue in dialogue_set[0:max_sent]:
+            previous_bspan = [self.reader.vocab.encode(constraint_eos), self.reader.vocab.encode(request_eos)]
+            previous_response = [self.reader.vocab.encode(response_eos)]
 
+            real_turns = []
+            predicted_turns = []
+            for turn in dialogue[0:max_turns]:
+                dial_id, turn_num, user, response, bspan, u_len, m_len, degree = turn.values()
+                response, bspan = [cfg.vocab_size] + response, [cfg.vocab_size] + bspan
+                predicted_response = self.evaluate(previous_bspan, previous_response, user, degree)
 
-def tensorize(id_lists):
-    tensorized = tf.ragged.constant([x for x in id_lists]).to_tensor()
-    return tf.cast(tensorized, dtype=tf.int32)
+                predicted_decoded = self.reader.vocab.sentence_decode(predicted_response.numpy())
+                real_decoded = self.reader.vocab.sentence_decode(response)
 
+                real_turns.append(real_decoded)
+                predicted_turns.append(predicted_decoded)
+                if verbose:
+                    print("Predicted:", predicted_decoded)
+                    print("Real:", real_decoded)
+                if log:
+                    neptune.log_text('predicted', self.reader.vocab.sentence_decode(predicted_response.numpy()))
+                    neptune.log_text('real', self.reader.vocab.sentence_decode(response))
 
-def produce_bspan_decoder_input(previous_bspan, previous_response, user_input):
-    inputs =[]
-    for counter, (x, y, z) in enumerate(zip(previous_bspan, previous_response, user_input)):
-        new_sample = x + y + z
-        inputs.append(new_sample)
-    return tensorize(inputs)
+            predictions.append(predicted_turns)
+            targets.append(real_turns)
 
+        if use_metric:
+            # BLEU
+            scorer = metric.BLEUScorer()
+            bleu = scorer.score(zip(predictions, targets))
 
-def produce_response_decoder_input(previous_bspan, previous_response, user_input, bspan, kb):
-    inputs = [a + b + c + d + e for a, b, c, d, e in zip(previous_bspan, previous_response, user_input, bspan, kb)]
-    return tensorize(inputs)
+            # Sucess F1
+            f1 = metric.success_f1_metric(targets, predictions)
+            self.f1s.append(f1)
+
+            if verbose:
+                print("Bleu: {:.4f}%".format(bleu*100))
+                print("F1: {:.4f}%".format(f1*100))
+            if log:
+                neptune.log_metric('bleu', epoch, bleu)
+                neptune.log_metric('f1', epoch, f1)
+                neptune.log_metric('f1_max', max(self.f1s))
+                if mode=='test':
+                    neptune.log_metric('f1_test', epoch, f1)
+                    neptune.log_metric('bleu_test', epoch, bleu)
 
 
 if __name__ == "__main__":
@@ -498,33 +657,7 @@ if __name__ == "__main__":
     cfg.init_handler(ds)
     cfg.dataset = ds.split('-')[-1]
     reader = CamRest676Reader()
-    model = SeqModel(vocab_size=cfg.vocab_size)
-    prev_bspan_eos, bspan_eos, response_eos = "EOS_Z1", "EOS_Z2", "EOS_M"
-    epochs = 10
-    for epoch in range(epochs):
-        data_iterator = reader.mini_batch_iterator('train')
-        for iter_num, dial_batch in enumerate(data_iterator):
-            turn_states = {}
-            prev_z = None
-            previous_bspan, previous_response = None, None
-            for turn_num, turn_batch in enumerate(dial_batch):
-                _, _, user, response, bspan_received, u_len, m_len, degree, _ = turn_batch.values()
-                batch_size = len(user)
-                if previous_bspan is None:
-                    previous_bspan = [[reader.vocab.encode(prev_bspan_eos)] for i in range(batch_size)]
-                    previous_response = [[reader.vocab.encode(response_eos)] for i in range(batch_size)]
-                target_bspan, target_response = tensorize(bspan_received), tensorize(response)
+    model = SeqModel(d_model=50, vocab_size=cfg.vocab_size, copynet=True, reader=reader)
+    model.train_model(epochs=1, log=False)
 
-                bspan_decoder_input = produce_bspan_decoder_input(previous_bspan, previous_response, user)
-                response_decoder_input = produce_response_decoder_input(previous_bspan, previous_response,
-                                                                        user, bspan_received, degree)
-                # TODO: the response decoding only uses the response decoder, not the encoder
 
-                # training the model
-                model.train_step_bspan(bspan_decoder_input, target_bspan)
-                model.train_step_response(response_decoder_input, target_response)
-
-                previous_bspan = [x if x != reader.vocab.encode(bspan_eos) else reader.vocab.encode(prev_bspan_eos)
-                                  for x in [y for y in bspan_received]]
-                previous_response = response
-                print(model.response_loss.result(), model.bspan_loss.result())

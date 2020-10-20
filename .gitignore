@@ -1,2 +1,6 @@
 .idea/
 .*.swp
+*.pyc
+*.pyd
+*__pycache__*
+implementation/tf/log/log*
