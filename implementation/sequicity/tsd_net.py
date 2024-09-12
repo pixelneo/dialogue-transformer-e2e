@@ -13,6 +13,69 @@ from torch.distributions import Categorical
 from reader import pad_sequences
 
 
+"""
+--------------------------------------------------------------------------------
+Naming
+--------------------------------------------------------------------------------
+    u_ is user input
+    z_ is bspan
+    m_ is machine response
+    
+    *_np is numpy version of * (eg. u_input_np is u_input in numpy.ndarray) 
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+Algorithm description
+--------------------------------------------------------------------------------
+In each turn, `t`, we take as input:
+    B(t-1) = belief span (=bspan) from the previous turn
+    R(t-1) = machine response from the previous turn
+    U(t) = the current user utterance
+Then, we execute the following steps:
+    1) Encode B(t-1)R(t-1)U(t) ... inspired from encoder-decoder ...
+        - in pure encoder-decoder, this would encode into a fixed sized vector
+        - however, we use attention, thus into a sequence of hidden states
+    2) Decode B(t)
+        - Uses BSpanDecoder
+        - (bspan_decoder is used unless training)
+    3) Knowledge-base search
+    4) Decode R(t)
+        - Uses ResponseDecoder
+        - (greedy_decode is used unless training)
+
+When training, bspan_decoder and greedy_decode are not used, instead spaghetti
+code with copy/pastes from the two functions...
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+Search type (beam/greedy/sampling)
+--------------------------------------------------------------------------------
+What is beam search used for?
+    - It doesn't need to be used. Greedy search is fine.
+
+Either greedy_decode or beam_search_decode or sampling_decode can be used.
+For now, let's be only concerned with greedy_decode for simplicity
+
+`sampling_decode` is another name for the optional "Reinforcement finetuing"
+step.
+
+TODO: What is greedy search used for?
+    - It invokes ResponseDecoder (however, not in training)
+--------------------------------------------------------------------------------
+
+
+--------------------------------------------------------------------------------
+Decoders
+--------------------------------------------------------------------------------
+TODO: What is the difference in implementation between BSpanDecoder and
+ResponseDecoder?
+
+BSpanDecoder's implementation is more complicated because in uses longer
+context. See code sections in the if `if pv_z_enc_out is None:`.
+--------------------------------------------------------------------------------
+"""
+
+
 def cuda_(var):
     return var.cuda() if cfg.cuda else var
 
@@ -29,11 +92,60 @@ def nan(v):
 
 def get_sparse_input_aug(x_input_np):
     """
-    sparse input of
-    :param x_input_np: [T,B]
-    :return: Numpy array: [B,T,aug_V]
+    :param x_input_np: Numpy (int?) array: [T,B]
+    :return: Pytorch float tensor: [B,T,aug_V]
+
+    Where:
+        - T = maximum length of sequence
+        - B = batch size
+        - aug_V = (vocab_size + T) = augmented vocabulary = vocabulary + input sentence words
+
+    Additional needed inputs:
+      - `vocab_size` is currently read from cfg.vocab_size.
+      - TODO: I personally don't like global variables, I believe it would be
+        nicer to have `vocab_size` at the input of this function.
+
+    Input x_input_np:
+        - Integer-encoded sentences
+        - t=0 (the first time index) is ignored.
+            - TODO: Where is this mentioned in CopyNet?
+            - This seems to be "right-shifting", as known from Transformer
+              architecture: If it weren't here, the model would just learn to
+              always copy the input to the output.
+        - Example: [[0,0,0], [3,2,1],[1,0,0]] contains three sentences:
+            - 1st sentence is of length 2: (word3 word1)
+            - 2nd sentence is of length 1: (word2)
+            - 3rd sentence is of length 1: (word1)
+        - TODO: I'd personally prefer examples, where all dimensions/variables
+          have different values. eg. vocab_size=5, T=4, B=3. This is 3x3, so T
+          = B, not a nice example
+
+    Result result:
+        - One-hot-encoded sentences
+        - Converted input example:
+            - [
+                [[0,0,0,0,1,0,0], [0,0,1,0,0,0,0]],
+                [[0,0,0,1,0,0,0], [0,0,0,0,0,0,0]],
+                [[0,0,1,0,0,0,0], [0,0,0,0,0,0,0]],
+            ]
+            - where those zeros are actually 10^-9 (TODO: Why is this?)
+            - TODO: What is vocab_size in this example?
+            - TOOD: I assume word0 is not possible to have. Why is (word1) not [1,0,0,0,0,0,0], but [0,0,1,0,0,0,0]?
+            - TODO: What is T in this example? Isn't the shape of this array [B,T-1,aug_V]?
+            - TODO: Couldn't aug_V thus be (vocab_size + (T-1))?
+        - One-hot-encoding of OOV words from the current input sentence. These
+          words can be copied over to the output with a Copy Mechanism: If
+          there is a unknown symbol x at time t, it adds a 1 at position
+          vocab_size+t in the last (aug_V) dimension.
+
+    We believe that it would be possible to this function with
+    `get_sparse_selective_input()` into a single function.
+
+    BTW: I'd prefer to use Integer-encoding and One-hot-encoding. (TODO: Do you guys agree?)
     """
     ignore_index = [0]
+    # TODO: What is `unk`? Does (word2) not exist and means OOV word?
+    # TODO: This should be a global constant. Not a magic number floating around the code-base
     unk = 2
     result = np.zeros((x_input_np.shape[0], x_input_np.shape[1], cfg.vocab_size + x_input_np.shape[0]),
                       dtype=np.float32)
@@ -59,6 +171,10 @@ def init_gru(gru):
 
 
 class Attn(nn.Module):
+    """
+    Attention implementation for standard GRU seq2seq with attention.
+    This will not be needed for our new "Transformer implementation".
+    """
     def __init__(self, hidden_size):
         super(Attn, self).__init__()
         self.hidden_size = hidden_size
@@ -102,6 +218,11 @@ class Attn(nn.Module):
 
 
 class SimpleDynamicEncoder(nn.Module):
+    """
+    This class should be replaced by a TransformerEncoder using
+    nn.modules.TransformerEncoderLayer. Also, implement dropout.
+    """
+
     def __init__(self, input_size, embed_size, hidden_size, n_layers, dropout):
         super().__init__()
         self.input_size = input_size
@@ -121,24 +242,40 @@ class SimpleDynamicEncoder(nn.Module):
         :param input_lens: *numpy array* of len for each input sequence
         :return:
         """
+        # From https://pytorch.org/docs/stable/nn.html#torch.nn.utils.rnn.pack_padded_sequence:
+        # B = batch size
+        # T = length of the longest sequence
+        # E = ??? (Probably just the final dimension)
         batch_size = input_seqs.size(1)
+
+        # Embeddings
         embedded = self.embedding(input_seqs)
         embedded = embedded.transpose(0, 1)  # [B,T,E]
+
+        # This code block handles padding, sorting and packing of input
+        # sequences using input_lens. This code will need to be different in
+        # our Transformer implementation, as transformers use various masks
+        # instead.
         sort_idx = np.argsort(-input_lens)
         unsort_idx = cuda_(torch.LongTensor(np.argsort(sort_idx)))
         input_lens = input_lens[sort_idx]
         sort_idx = cuda_(torch.LongTensor(sort_idx))
         embedded = embedded[sort_idx].transpose(0, 1)  # [T,B,E]
         packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, input_lens)
+
+        # GRU RNN
         outputs, hidden = self.gru(packed, hidden)
 
+        # The padding, sorting and packing in the code block above is
+        # preprocessing to pass the data to the GRU. Now, GRU outputs must be
+        # postprocessed to obtain unpacked, unpadded data in original order.
         outputs, _ = torch.nn.utils.rnn.pad_packed_sequence(outputs)
         outputs = outputs[:, :, :self.hidden_size] + outputs[:, :, self.hidden_size:]
         outputs = outputs.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
         hidden = hidden.transpose(0, 1)[unsort_idx].transpose(0, 1).contiguous()
-        
+
         # outputs are the 'hidden' states of the last gru layer
-        # hidden are the hidden states of the last time-step in each layer 
+        # hidden are the hidden states of the last time-step in each layer
         # embedded are just the embedding for inputs
         return outputs, hidden, embedded
 
@@ -174,9 +311,11 @@ class BSpanDecoder(nn.Module):
 
     def forward(self, u_enc_out, z_tm1, last_hidden, u_input_np, pv_z_enc_out, prev_z_input_np, u_emb, pv_z_emb,
                 position):
+        # TODO: Document what exactly are the inputs and outputs of this forward function?
 
         sparse_u_input = Variable(get_sparse_input_aug(u_input_np), requires_grad=False)
 
+        # Attention mechanism. Not needed in out Transformer version.
         if pv_z_enc_out is not None:
             # IHMO we are at least 2nd time step. so this is just longer context (where does this apper in the paper?)
             context = self.attn_u(last_hidden, torch.cat([pv_z_enc_out, u_enc_out], dim=0), mask=True,
@@ -186,12 +325,17 @@ class BSpanDecoder(nn.Module):
             # no previous encoder output => 1st time step
             context = self.attn_u(last_hidden, u_enc_out, mask=True, inp_seqs=u_input_np,
                                   stop_tok=[self.vocab.encode('EOS_M')])
-        
+
         # embedding of GO token
+        # TODO: Look into the special tokens
         # see main training loop (forward_turn func):
         # cuda_(Variable(torch.ones(1, batch_size).long() * 3))  # GO_2 token
         embed_z = self.emb(z_tm1)
         # embed_z = self.inp_dropout(embed_z)
+
+        # Here starts a CopyNet implementation = (GRU + generation/copy
+        # score). This will be replaced by our "Transformer with Copy
+        # Mechanism" implementation.
 
         if cfg.use_positional_embedding:  # defaulty not used
             position_label = [position] * u_enc_out.size(1)  # [B]
@@ -203,13 +347,13 @@ class BSpanDecoder(nn.Module):
         gru_in = torch.cat([embed_z, context], 2)
         gru_out, last_hidden = self.gru(gru_in, last_hidden)
         # gru_out = self.inp_dropout(gru_out)
-         
+
         # simple 'generate' (as oppose to copy) score (see eq. 3)
         gen_score = self.proj(torch.cat([gru_out, context], 2)).squeeze(0)
         # gen_score = self.inp_dropout(gen_score)
         u_copy_score = self.proj_copy1(u_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
         # stable version of copynet
-        
+
         # TODO this i know is copy score, however what the three (un)squeezes do, i do not know 
         # (ie  what shape it had and why it has to change it twice)
         u_copy_score = torch.matmul(u_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
@@ -221,7 +365,7 @@ class BSpanDecoder(nn.Module):
         u_copy_score = cuda_(u_copy_score)
         if pv_z_enc_out is None:
             # u_copy_score = self.inp_dropout(u_copy_score)
-            
+
             # concat generate and copy scores (for each slot) and do softmax
             scores = F.softmax(torch.cat([gen_score, u_copy_score], dim=1), dim=1)
             # first part is for generation and the second for copy score 
@@ -234,7 +378,12 @@ class BSpanDecoder(nn.Module):
             proba = torch.cat([proba, u_copy_score[:, cfg.vocab_size:]], 1)
         else:
             # IHMO also compute copy probability from the encoder output from the previous time step
-            # and concat it 
+            # and concat it.
+            #
+            # This sounds interensting. Seems like an additional trick. Is this
+            # described in the paper? Maybe we could additionally do a similar
+            # trick for "Transformer with Copy Mechanism" and see if it
+            # improves results.
             sparse_pv_z_input = Variable(get_sparse_input_aug(prev_z_input_np), requires_grad=False)
             pv_z_copy_score = self.proj_copy2(pv_z_enc_out.transpose(0, 1)).tanh()  # [B,T,H]
             pv_z_copy_score = torch.matmul(pv_z_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
@@ -256,6 +405,9 @@ class BSpanDecoder(nn.Module):
 
 class ResponseDecoder(nn.Module):
     def __init__(self, embed_size, hidden_size, vocab_size, degree_size, dropout_rate, gru, proj, emb, vocab):
+        # Extra degree_size, gru, proj, emb
+        # degree_size not used, TODO: remove from codebase.
+        # Doesn't do position_encoding_init. Instead, receives embeddings on input.
         super().__init__()
         self.emb = emb
         self.attn_z = Attn(hidden_size)
@@ -270,9 +422,22 @@ class ResponseDecoder(nn.Module):
         self.vocab = vocab
 
     def get_sparse_selective_input(self, x_input_np):
+        """
+        Very similar to get_sparse_input_aug. Have a look at its docstring first.
+
+        However, if the word in question is one of reqs = ['address', 'phone',
+        'postcode', 'pricerange', 'area'], it appends _SLOT at the end of it
+        (eg. phone -> phone_SLOT), and then it gets the corresponding
+        one-hot-encoding representation.
+
+        Also, SLOTS and OOV words recieve a 5.0 instead of a 1.0 in their
+        output "one-hot-encoding". Probably because they should have a much
+        higher chance to be copied. TODO: Verify, is this in the paper?
+        """
         result = np.zeros((x_input_np.shape[0], x_input_np.shape[1], cfg.vocab_size + x_input_np.shape[0]),
                           dtype=np.float32)
         result.fill(1e-10)
+        # TODO: This should be a constant.
         reqs = ['address', 'phone', 'postcode', 'pricerange', 'area']
         for t in range(x_input_np.shape[0] - 1):
             for b in range(x_input_np.shape[1]):
@@ -282,6 +447,12 @@ class ResponseDecoder(nn.Module):
                     slot = self.vocab.encode(word + '_SLOT')
                     result[t + 1][b][slot] = 1.0
                 else:
+                    # "if word is unknown OR its one-hot index is larger than vocab_size"
+                    #
+                    # TODO: I don't understand why they have the OR here. Why
+                    # do we check for two different representation of OOV
+                    # words? Shouldn't all unknown words be replaced by an
+                    # index > vocab_size at the same time?
                     if w == 2 or w >= cfg.vocab_size:
                         result[t + 1][b][cfg.vocab_size + t] = 5.0
                     else:
@@ -291,22 +462,37 @@ class ResponseDecoder(nn.Module):
         return result
 
     def forward(self, z_enc_out, u_enc_out, u_input_np, m_t_input, degree_input, last_hidden, z_input_np):
+        """
+        This is an implementation of the decoder part of CopyNet. We want to
+        replace this with a Transformer Decoder with a Copy Mechanism.
+
+        Does:
+            1) Transformation of input into sparse - TODO: Look into this, might be important
+            2) Attention, GRU, generation/copy score = CopyNet - No need to understand closely, should be replaced.
+        """
+        # TODO: Document what exactly are the inputs and outputs of this forward function?
         sparse_z_input = Variable(self.get_sparse_selective_input(z_input_np), requires_grad=False)
 
         m_embed = self.emb(m_t_input)
-        
-        # z_enc_out are stacked (along the time-step axis) outputs of the BSpan decoder
+
+        # z_enc_out are stacked (along the time-step axis) belief spans (computed in BSpanDecoder)
+        # TODO: Why should this be a BSpanDecoder output, when the variable states:
+        #   - z_ = belief span
+        #   - enc_out = encoder output
+        #   - Would a better name be z_dec_out, or is this incorrect understanding of the code?
         z_context = self.attn_z(last_hidden, z_enc_out, mask=True, stop_tok=[self.vocab.encode('EOS_Z2')],
                                 inp_seqs=z_input_np)
-        # u_enc_out are output from the encoder
+
+        # u_enc_out are "user encoder output" = user inputs encoded by the Encoder (SimpleDynamicEncoder)
         u_context = self.attn_u(last_hidden, u_enc_out, mask=True, stop_tok=[self.vocab.encode('EOS_M')],
                                 inp_seqs=u_input_np)
-                                
+
         # TODO what is degree_input? it is coming from the data
         gru_in = torch.cat([m_embed, u_context, z_context, degree_input.unsqueeze(0)], dim=2)
         gru_out, last_hidden = self.gru(gru_in, last_hidden)
-        
-        # following lines are similar to the previous classes
+
+        # The following lines are similar to the previous classes.
+        # They compute the generation score and the copy score = implementation details of CopyNet.
         gen_score = self.proj(torch.cat([z_context, u_context, gru_out], 2)).squeeze(0)
         z_copy_score = self.proj_copy2(z_enc_out.transpose(0, 1)).tanh()
         z_copy_score = torch.matmul(z_copy_score, gru_out.squeeze(0).unsqueeze(2)).squeeze(2)
@@ -326,6 +512,9 @@ class ResponseDecoder(nn.Module):
 
 
 class TSD(nn.Module):
+    """
+
+    """
     def __init__(self, embed_size, hidden_size, vocab_size, degree_size, layer_num, dropout_rate, z_length,
                  max_ts, beam_search=False, teacher_force=100, **kwargs):
         super().__init__()
@@ -410,6 +599,9 @@ class TSD(nn.Module):
         z_tm1 = cuda_(Variable(torch.ones(1, batch_size).long() * 3))  # GO_2 token
         m_tm1 = cuda_(Variable(torch.ones(1, batch_size).long()))  # GO token
         if mode == 'train':
+            """
+            Training code. Contains some code repetition with bspan_decoder and greedy_decode.
+            """
             pz_dec_outs = []
             pz_proba = []
             z_length = z_input.size(0) if z_input is not None else self.z_length  # GO token
@@ -477,6 +669,9 @@ class TSD(nn.Module):
                                             degree_input, bspan_index)
 
     def bspan_decoder(self, u_enc_out, z_tm1, last_hidden, u_input_np, pv_z_enc_out, prev_z_input_np, u_emb, pv_z_emb):
+        """
+        For training, bspan_decoder is not used, instead, z_decoder is called directly.
+        """
         pz_dec_outs = []
         pz_proba = []
         decoded = []
@@ -510,6 +705,9 @@ class TSD(nn.Module):
         return pz_dec_outs, decoded, last_hidden
 
     def greedy_decode(self, pz_dec_outs, u_enc_out, m_tm1, u_input_np, last_hidden, degree_input, bspan_index):
+        """
+        For training, greedy_decode is not used, instead, m_decoder is called directly.
+        """
         decoded = []
         bspan_index_np = pad_sequences(bspan_index).transpose((1, 0))
         for t in range(self.max_ts):
